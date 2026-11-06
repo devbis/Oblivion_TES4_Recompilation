@@ -168,8 +168,11 @@ public class LauncherActivity extends Activity {
         sv.addView(root);
 
         text(root, "Oblivion", 28, true);
+        text(root, "Developed by Toby Tomkinson.", 14, false);
+        text(root, "Only from github.com/ttom795/Oblivion_Android. A copy from any other source is unauthorized.", 14, false);
 
         text(root, "Game folder", 20, true);
+
         folderText = text(root, "", 14, false);
         folderStatus = text(root, "", 14, false);
         Button pick = new Button(this);
