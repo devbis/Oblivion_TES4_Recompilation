@@ -50,8 +50,5 @@ TODO: List
 - Steam Oblivion folder
 - d3dx9_27.dll
 
-## Known issues
-- Music and voices in xWMA format play silent.
-
 ## Legal
 The Elder Scrolls, Oblivion, Bethesda and all related names and assets belong to their respective owners. This project is not affiliated with or endorsed by them. Do not redistribute anything produced from the game or game files. Third-party code keeps its own licenses: SDL2 (zlib) in `android/app/jni/SDL2`, dxvk-native (zlib) in `android/app/jni/dxvk`.
