@@ -10,7 +10,7 @@ Discord: http://discord.gg/df3cK2JCqs
 
 Youtube link below:
 
-[![Watch the video](https://img.youtube.com/vi/ulNNJn67AWQ/hqdefault.jpg)](https://www.youtube.com/watch?v=ulNNJn67AWQ)
+[![Watch the video](https://img.youtube.com/vi/cWujRxtQTP0/hqdefault.jpg)](https://www.youtube.com/watch?v=cWujRxtQTP0)
 
 ## Build
 **Windows:** run `build_windows.bat C:\path\to\OblivionFolder` (does steps 2-4 below with `tools/regen_gen.py`, no WSL needed; set `ANDROID_HOME` first). Linux/macOS: `python3 tools/regen_gen.py GAME` or `tools/regen_gen.sh GAME`.
