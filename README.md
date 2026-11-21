@@ -1,8 +1,10 @@
 # The Elder Scrolls IV: Oblivion (PC, 2006) for Android
 
-An unofficial "native" Android port of the original 2006 PC version of *The Elder Scrolls IV: Oblivion* (not Remastered) from Steam. It should run on any arm64 phone with Vulkan 1.1 and is tested on a Snapdragon device with an Adreno 610 GPU (Retroid Pocket Duo Lite, if anyone is curious).
+An unofficial "native" Android port of the original 2006 PC version of *The Elder Scrolls IV: Oblivion* (not Remastered). It should run on any arm64 phone with Vulkan 1.1 and is tested on a Snapdragon device with an Adreno 610 GPU (Retroid Pocket Duo Lite, if anyone is curious).
 
-This repository contains no game code or data. You need your own copy of the PC game, which is used as a basis for the recompilation. Personally, I used the Steam version.
+This repository contains no game code or data. You need your own copy of the PC game, which is used as a basis for the recompilation. Tested using 1.2.0.416 from both Steam and disc installs. 
+
+Non-OBSE mods and DLC are supported by default.
 
 Discord: http://discord.gg/df3cK2JCqs
 
@@ -46,7 +48,7 @@ Youtube link below:
 
 ## Game files you need
 
-Everything comes from your own PC install of *The Elder Scrolls IV: Oblivion* (2006).
+Everything comes from your own PC install of *The Elder Scrolls IV: Oblivion* (2006). Tested using 1.2.0.416 from Steam and disc installs.
 
 TODO: List
 
