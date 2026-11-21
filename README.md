@@ -12,9 +12,11 @@ Discord: http://discord.gg/df3cK2JCqs
 
 Youtube link below:
 
-<a href="https://www.youtube.com/watch?v=cWujRxtQTP0">
-  <img src="https://img.youtube.com/vi/cWujRxtQTP0/maxresdefault.jpg" width="75%">
-</a>
+<div align="center">
+  <a href="https://www.youtube.com/watch?v=cWujRxtQTP0">
+    <img src="https://img.youtube.com/vi/cWujRxtQTP0/maxresdefault.jpg" width="75%">
+  </a>
+</div>
 
 ## Controls (controller)
 | Button | Action |
