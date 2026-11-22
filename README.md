@@ -18,20 +18,25 @@ Youtube link below:
   </a>
 </div>
 
-## Controls (controller)
-| Button | Action |
-|---|---|
-| Left stick / right stick | Move / look |
-| A | Activate |
-| B | Menu / journal |
-| X | Ready weapon |
-| Y | Jump |
-| LB | Run (hold Shift; walks while Always Run is on) |
-| RB | Cast spell |
-| LT / RT | Block / attack |
-| L3 / R3 | Sneak / change camera |
-| D-pad | Hotkeys 1 to 4 |
-| Back / Start | Wait / pause |
+## **Controls (NorthernUI)**
+
+| Button                   | Action                |
+| ------------------------ | --------------------- |
+| Left stick / right stick | Move / look           |
+| A                        | Activate              |
+| B                        | Journal               |
+| X                        | Ready / sheath weapon |
+| Y                        | Jump                  |
+| LB                       | Grab objects          |
+| RB                       | Cast spell            |
+| LT                       | Block                 |
+| RT                       | Attack                |
+| L3                       | Toggle sneak          |
+| R3                       | Change camera         |
+| D-pad                    | Hotkeys 1 to 4        |
+| Back / Start             | Wait / pause          |
+
+Hotkeys require the [NorthernUI Hotkeys](https://www.nexusmods.com/oblivion/mods/51534) addon.
 
 ## Build
 **Windows:** run `build_windows.bat C:\path\to\OblivionFolder` (does steps 2-4 below with `tools/regen_gen.py`, no WSL needed; set `ANDROID_HOME` first). Linux/macOS: `python3 tools/regen_gen.py GAME` or `tools/regen_gen.sh GAME`.
