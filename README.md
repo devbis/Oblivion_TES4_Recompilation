@@ -8,7 +8,7 @@ Non-OBSE mods and DLC are supported by default.
 
 Discord: http://discord.gg/df3cK2JCqs
 
-### Expect crashes, this is an early WIP build!
+#### This is a WIP build!
 
 Youtube link below:
 
