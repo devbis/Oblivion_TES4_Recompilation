@@ -52,12 +52,12 @@ Youtube link below:
 
 ## Game files you need
 
-Everything comes from your own PC install of *The Elder Scrolls IV: Oblivion* (2006). Tested using 1.2.0.416 from Steam and disc installs.
+Everything comes from your own PC install of *The Elder Scrolls IV: Oblivion* (2006). Tested using 1.2.0.416 from Steam, GOG Deluxe, GOG GOTY, and disc installs.
 
 TODO: List
 
 - Steam Oblivion folder
-- d3dx9_27.dll
+- d3dx9_27.dll (32-bit)
 
 ## Legal
 The Elder Scrolls, Oblivion, Bethesda and all related names and assets belong to their respective owners. This project is not affiliated with or endorsed by them. Do not redistribute anything produced from the game or game files. Third-party code keeps its own licenses: SDL2 (zlib) in `android/app/jni/SDL2`, dxvk-native (zlib) in `android/app/jni/dxvk`.
