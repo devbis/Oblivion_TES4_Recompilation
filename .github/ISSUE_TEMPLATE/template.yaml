@@ -1,6 +1,6 @@
-name: Bug Report
-description: File a bug report with required logs or screenshots
-title: "[Bug]: "
+name: Issue Report
+description: File a report with required logs or screenshots
+title: "[Issue]: "
 body:
   - type: textarea
     id: description
