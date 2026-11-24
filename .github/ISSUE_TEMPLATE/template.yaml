@@ -1,0 +1,19 @@
+name: Bug Report
+description: File a bug report with required logs or screenshots
+title: "[Bug]: "
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Describe the issue you're having.
+    validations:
+      required: true
+
+  - type: upload
+    id: attachment
+    attributes:
+      label: Required Attachment
+      description: Please upload your log file.
+    validations:
+      required: true
+      accept: ".txt"
