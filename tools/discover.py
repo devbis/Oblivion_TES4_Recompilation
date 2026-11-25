@@ -9,6 +9,7 @@ Output: analysis/functions.json
     "jump_tables": {insn_addr: [targets]}, "indirect_jumps": [...] }
 """
 import json
+import os
 import struct
 import sys
 from array import array
@@ -79,6 +80,11 @@ for imp in pe.DIRECTORY_ENTRY_IMPORT:
 
 jump_tables = {}
 NORETURN = {"_CxxThrowException", "abort", "exit", "_exit", "_amsg_exit", "ExitProcess", "_invoke_watson"}
+# Oblivion's __CxxThrowException helper ends in an indirect RaiseException
+# call. The RaiseException import is not generally noreturn, but this wrapper
+# is: following its fallthrough decodes the embedded SEH scope table as code
+# and makes valid functions containing C++ exception paths look malformed.
+NORETURN_WRAPPERS = {0x983F4C} if os.environ.get("LIFT_GAME") == "oblivion" else set()
 
 
 # Likely function starts (targets of `call rel32` that follow padding or are
@@ -105,6 +111,8 @@ def scan_tail_starts():
 
 def noreturn_call(op):
     """call [iat] or call stub-that-jmps-[iat] to a function that never returns."""
+    if op.type == x86.X86_OP_IMM and (op.imm & 0xFFFFFFFF) in NORETURN_WRAPPERS:
+        return True
     if op.type == x86.X86_OP_MEM and op.mem.base == 0 and op.mem.index == 0:
         slot = op.mem.disp & 0xFFFFFFFF
     elif op.type == x86.X86_OP_IMM and in_text(op.imm):
