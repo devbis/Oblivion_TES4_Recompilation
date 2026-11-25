@@ -143,6 +143,7 @@ uint32_t d3d9_wrap(void *host, int iface) {
 // ---------------------------------------------------------------- structs
 extern "C" int touch_available(void);
 extern "C" void platform_drawable_size(int *, int *);
+extern "C" void platform_window_size(int *, int *);
 extern "C" int platform_native_fullscreen_active(void);
 
 static void pp_from_guest(uint32_t g, D3DPRESENT_PARAMETERS *pp) {
@@ -298,6 +299,21 @@ extern "C" void bridge_view_rect(float *x0, float *y0, float *x1, float *y1) {
     RECT r = view_rect();
     *x0 = (float)r.left / ww; *x1 = (float)r.right / ww;
     *y0 = (float)r.top / wh; *y1 = (float)r.bottom / wh;
+}
+
+static const RECT *present_dest_rect(const RECT *requested, const RECT &fit) {
+    if (requested) return requested;
+    int ww = 1280, wh = 720;
+    platform_drawable_size(&ww, &wh);
+    int cw = 1280, ch = 720;
+    platform_window_size(&cw, &ch);
+    // On a Retina window, DXVK's implicit client size is in points while its
+    // Vulkan target is in drawable pixels. Give Present the pixel-sized rect
+    // explicitly so it scales the back buffer across the whole drawable.
+    if (ww != cw || wh != ch || fit.left || fit.top || fit.right != ww || fit.bottom != wh ||
+        g_bb_w != (uint32_t)ww || g_bb_h != (uint32_t)wh)
+        return &fit;
+    return nullptr;
 }
 
 void B_IDirect3D9_GetAdapterModeCount(CPU *c) { RET(mode_count(), 3); }
@@ -474,7 +490,7 @@ void B_IDirect3DDevice9_Present(CPU *c) {
     touch_draw(d);
     { extern void hud_screen_present(IDirect3DDevice9 *); hud_screen_present(d); }
     RECT vr = view_rect();
-    const RECT *dst = ARG(2) ? (const RECT *)GPTR(ARG(2)) : (vr.left || vr.top) ? &vr : nullptr;
+    const RECT *dst = present_dest_rect((const RECT *)GPTR(ARG(2)), vr);
     HRESULT hr = d->Present((const RECT *)GPTR(ARG(1)), dst, nullptr, (const RGNDATA *)GPTR(ARG(4)));
     platform_present_hook();
     bisect_present();
@@ -490,7 +506,7 @@ void B_IDirect3DDevice9_GetNPatchMode(CPU *c) {
 void B_IDirect3DSwapChain9_Present(CPU *c) {
     auto *s = (IDirect3DSwapChain9 *)com_host(ARG(0));
     RECT vr = view_rect();
-    const RECT *dst = ARG(2) ? (const RECT *)GPTR(ARG(2)) : (vr.left || vr.top) ? &vr : nullptr;
+    const RECT *dst = present_dest_rect((const RECT *)GPTR(ARG(2)), vr);
     HRESULT hr = s->Present((const RECT *)GPTR(ARG(1)), dst, nullptr, (const RGNDATA *)GPTR(ARG(4)), ARG(5));
     platform_present_hook();
     RET(hr, 6);
