@@ -39,7 +39,7 @@ static const uint8_t k_iid_media_event[16] = {
 typedef struct {
     uint32_t builder, control, media_position, basic_audio, media_event;
     unsigned views;
-    int state, volume_mb, balance;
+    int state, volume_mb, balance, volume_explicit;
     char path[PATH_MAX];
     void *player;
 } MediaGraph;
@@ -56,6 +56,31 @@ extern void mac_audio_release(void *handle);
 extern double mac_audio_duration(void *handle);
 extern double mac_audio_position(void *handle);
 extern void mac_audio_set_position(void *handle, double position);
+
+static float graph_ini_music_gain(const MediaGraph *g) {
+    const char *name = strrchr(g->path, '/');
+    name = name ? name + 1 : g->path;
+    const char *key = !strcasecmp(name, "tes4title.mp3")
+        ? "fMainMenuMusicVolume" : "fDefaultMusicVolume";
+    return oblivion_audio_volume("fDefaultMasterVolume", 1.0f) *
+           oblivion_audio_volume(key, 1.0f);
+}
+
+static int32_t gain_to_volume_mb(float gain) {
+    if (gain <= 0.0f) return -10000;
+    float mb = 2000.0f * log10f(gain);
+    if (mb < -10000.0f) return -10000;
+    if (mb > 0.0f) return 0;
+    return (int32_t)lrintf(mb);
+}
+
+static void graph_apply_volume(MediaGraph *g) {
+    if (!g || !g->player) return;
+    float gain = g->volume_explicit
+        ? powf(10.0f, (float)g->volume_mb / 2000.0f)
+        : graph_ini_music_gain(g);
+    mac_audio_set_volume(g->player, gain);
+}
 
 static uint32_t graph_qi(uint32_t self, uint32_t iid, uint32_t out) {
     if (!out) return E_POINTER;
@@ -145,7 +170,8 @@ static uint32_t graph_render_file(MediaGraph *g, uint32_t guest_path) {
     g->player = mac_audio_open(absolute_path);
     if (!g->player) return E_FAIL;
     snprintf(g->path, sizeof g->path, "%s", absolute_path);
-    mac_audio_set_volume(g->player, powf(10.0f, (float)g->volume_mb / 2000.0f));
+    if (!g->volume_explicit) g->volume_mb = gain_to_volume_mb(graph_ini_music_gain(g));
+    graph_apply_volume(g);
     LOG("directshow: RenderFile %s", g->path);
     return S_OK;
 }
@@ -247,7 +273,8 @@ SHIM(ba_SetVolume) {
     if (v < -10000 || v > 0) RET(0x80070057u, 2);
     if (g) {
         g->volume_mb = v;
-        if (g->player) mac_audio_set_volume(g->player, powf(10.0f, (float)v / 2000.0f));
+        g->volume_explicit = 1;
+        graph_apply_volume(g);
     }
     RET(S_OK, 2);
 }

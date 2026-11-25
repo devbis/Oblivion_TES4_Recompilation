@@ -287,7 +287,15 @@ SHIM(dsb_SetFormat) {
     if (w) { b->channels = M16(w + 2); b->rate = (int)M32(w + 4); b->bits = M16(w + 14); }
     RET(0, 2);
 }
-SHIM(dsb_SetVolume) { B->volume = (int32_t)ARG(1); RET(0, 2); }
+SHIM(dsb_SetVolume) {
+    DSBuf *b = B;
+    int32_t volume = (int32_t)ARG(1);
+    SDL_LockMutex(g_mix_lock);
+    b->volume = volume;
+    if (b->primary) g_master = db_to_amp(volume);
+    SDL_UnlockMutex(g_mix_lock);
+    RET(0, 2);
+}
 SHIM(dsb_SetPan) { B->pan = (int32_t)ARG(1); RET(0, 2); }
 SHIM(dsb_SetFrequency) { B->freq = ARG(1); RET(0, 2); }
 SHIM(dsb_Stop) {

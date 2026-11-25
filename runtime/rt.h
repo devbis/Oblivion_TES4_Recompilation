@@ -82,5 +82,7 @@ extern char g_game_dir[1024];
 extern char g_save_dir[1024];
 /* Map a Windows path to a host path, resolving case-insensitively. */
 int rt_host_path(const char *win, char *out, size_t outsz);
+/* Read an Oblivion [Audio] volume setting (normalized to 0..1). */
+float oblivion_audio_volume(const char *key, float fallback);
 
 void rt_init_shims(void);

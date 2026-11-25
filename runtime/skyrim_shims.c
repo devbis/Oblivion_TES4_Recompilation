@@ -3,6 +3,7 @@
 #define _GNU_SOURCE
 #include "rt.h"
 #include <ctype.h>
+#include <math.h>
 #include <string.h>
 #include <strings.h>
 #include <sys/stat.h>
@@ -107,6 +108,20 @@ static const char *ini_find(IniFile *f, const char *sec, const char *key) {
     for (int i = 0; i < f->n; i++)
         if (f->e[i].key && !strcasecmp(f->e[i].sec, sec) && !strcasecmp(f->e[i].key, key)) return f->e[i].val;
     return NULL;
+}
+
+float oblivion_audio_volume(const char *key, float fallback) {
+    static const char path[] = "C:\\Users\\Player\\Documents\\My Games\\Oblivion\\Oblivion.ini";
+    pthread_mutex_lock(&g_ini_lock);
+    IniFile *f = ini_get(path);
+    const char *raw = f && key ? ini_find(f, "Audio", key) : NULL;
+    char *end = NULL;
+    float value = raw ? strtof(raw, &end) : fallback;
+    if (!raw || end == raw || !isfinite(value)) value = fallback;
+    pthread_mutex_unlock(&g_ini_lock);
+    if (value < 0.0f) return 0.0f;
+    if (value > 1.0f) return 1.0f;
+    return value;
 }
 
 /* Copies a double-NUL list or a string into a guest buffer, Windows style:
