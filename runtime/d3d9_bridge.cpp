@@ -142,6 +142,8 @@ uint32_t d3d9_wrap(void *host, int iface) {
 
 // ---------------------------------------------------------------- structs
 extern "C" int touch_available(void);
+extern "C" void platform_drawable_size(int *, int *);
+extern "C" int platform_native_fullscreen_active(void);
 
 static void pp_from_guest(uint32_t g, D3DPRESENT_PARAMETERS *pp) {
     memset(pp, 0, sizeof *pp);
@@ -248,7 +250,7 @@ static void mode_aspect(int ww, int wh, int64_t *an, int64_t *ad) {
 }
 static uint32_t mode_count(int *ww, int *wh, int64_t *an, int64_t *ad, uint32_t *top) {
     *ww = 1280; *wh = 720;
-    SDL_GetWindowSize((SDL_Window *)platform_window(), ww, wh);
+    platform_drawable_size(ww, wh);
     mode_aspect(*ww, *wh, an, ad);
     int64_t t = (int64_t)*ww * *ad / *an;
     *top = (uint32_t)(t < *wh ? t : *wh);
@@ -276,7 +278,7 @@ extern "C" void bridge_scaled_mode(uint32_t i, uint32_t *w, uint32_t *h) {
 static uint32_t g_bb_w, g_bb_h;
 static RECT view_rect() {
     int ww = 1280, wh = 720;
-    SDL_GetWindowSize((SDL_Window *)platform_window(), &ww, &wh);
+    platform_drawable_size(&ww, &wh);
     RECT r = {0, 0, ww, wh};
     if (!g_bb_w || !g_bb_h) return r;
     int64_t w = (int64_t)wh * g_bb_w / g_bb_h, h = wh;
@@ -292,7 +294,7 @@ static RECT view_rect() {
 // The same rectangle in 0..1 window coordinates, for the touch overlay.
 extern "C" void bridge_view_rect(float *x0, float *y0, float *x1, float *y1) {
     int ww = 1280, wh = 720;
-    SDL_GetWindowSize((SDL_Window *)platform_window(), &ww, &wh);
+    platform_drawable_size(&ww, &wh);
     RECT r = view_rect();
     *x0 = (float)r.left / ww; *x1 = (float)r.right / ww;
     *y0 = (float)r.top / wh; *y1 = (float)r.bottom / wh;
@@ -320,7 +322,7 @@ void B_IDirect3D9_GetAdapterDisplayMode(CPU *c) {
     HRESULT hr = d3d->GetAdapterDisplayMode(ARG(1), &m);
     if (FAILED(hr) || !m.Width || !m.Height) {
         int w = 1280, h = 720;
-        SDL_GetWindowSize((SDL_Window *)platform_window(), &w, &h);
+        platform_drawable_size(&w, &h);
         m.Width = (UINT)w;
         m.Height = (UINT)h;
         m.RefreshRate = 60;
@@ -340,6 +342,17 @@ void B_IDirect3D9_CreateDevice(CPU *c) {
     auto *d3d = (IDirect3D9 *)com_host(ARG(0));
     D3DPRESENT_PARAMETERS pp;
     pp_from_guest(ARG(5), &pp);
+#ifdef GAME_OBLIVION
+    if (platform_native_fullscreen_active()) {
+        int w = 0, h = 0;
+        platform_drawable_size(&w, &h);
+        if (w > 0 && h > 0) {
+            pp.BackBufferWidth = (UINT)w;
+            pp.BackBufferHeight = (UINT)h;
+            LOG("native fullscreen back buffer %ux%u", pp.BackBufferWidth, pp.BackBufferHeight);
+        }
+    }
+#endif
     LOG("CreateDevice %ux%u fmt=%d ds=%d/%d windowed(guest)=%u flags=%x interval=%x",
         pp.BackBufferWidth, pp.BackBufferHeight, pp.BackBufferFormat, pp.EnableAutoDepthStencil,
         pp.AutoDepthStencilFormat, M32(ARG(5) + 32), ARG(4), pp.PresentationInterval);
@@ -384,6 +397,16 @@ void B_IDirect3DDevice9_Reset(CPU *c) {
     auto *d = (IDirect3DDevice9 *)com_host(ARG(0));
     D3DPRESENT_PARAMETERS pp;
     pp_from_guest(ARG(1), &pp);
+#ifdef GAME_OBLIVION
+    if (platform_native_fullscreen_active()) {
+        int w = 0, h = 0;
+        platform_drawable_size(&w, &h);
+        if (w > 0 && h > 0) {
+            pp.BackBufferWidth = (UINT)w;
+            pp.BackBufferHeight = (UINT)h;
+        }
+    }
+#endif
     { extern void hud_screen_reset(void); hud_screen_reset(); }
     rt_host_affinity_begin();
     HRESULT hr = d->Reset(&pp);

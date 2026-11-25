@@ -3,12 +3,16 @@
 #include "game.h"
 #include "rt.h"
 #include <SDL2/SDL.h>
+#include <SDL2/SDL_vulkan.h>
 #ifndef __ANDROID__
 #include <fcntl.h>
 #endif
 
 static SDL_Window *g_window;
 static int g_frames;
+static int g_native_fullscreen;
+static int g_windowed_w = 1280, g_windowed_h = 720;
+static int g_windowed_x = SDL_WINDOWPOS_CENTERED, g_windowed_y = SDL_WINDOWPOS_CENTERED;
 static void load_key_script(void);
 #ifdef __APPLE__
 static int g_mouse_screen_x, g_mouse_screen_y;
@@ -16,6 +20,7 @@ static int g_window_screen_x, g_window_screen_y;
 static int g_mouse_captured;
 static int g_mouse_capture_requested = 1;
 static Uint32 g_capture_suppressed_buttons;
+static int g_fullscreen_toggle_key_held;
 typedef int (*PlatformMainCallFn)(void *);
 typedef struct { int (*call)(PlatformMainCallFn, void *); } PlatformMainDispatcher;
 typedef struct PlatformMainCall {
@@ -109,6 +114,46 @@ static int platform_apply_cursor_visibility(void *arg) {
     return 1;
 }
 
+static void platform_update_user_screen_size(void) {
+    int w, h;
+    if (__atomic_load_n(&g_native_fullscreen, __ATOMIC_RELAXED))
+        SDL_Vulkan_GetDrawableSize(g_window, &w, &h);
+    else
+        SDL_GetWindowSize(g_window, &w, &h);
+    extern void user32_set_screen(int, int);
+    user32_set_screen(w, h);
+}
+
+static int platform_toggle_fullscreen_main(void *arg) {
+    (void)arg;
+    if (!g_native_fullscreen) {
+        SDL_GetWindowPosition(g_window, &g_windowed_x, &g_windowed_y);
+        SDL_GetWindowSize(g_window, &g_windowed_w, &g_windowed_h);
+        if (SDL_SetWindowFullscreen(g_window, SDL_WINDOW_FULLSCREEN_DESKTOP) < 0) {
+            LOG("SDL_SetWindowFullscreen(enable): %s", SDL_GetError());
+            return 0;
+        }
+        __atomic_store_n(&g_native_fullscreen, 1, __ATOMIC_RELAXED);
+    } else {
+        if (SDL_SetWindowFullscreen(g_window, 0) < 0) {
+            LOG("SDL_SetWindowFullscreen(disable): %s", SDL_GetError());
+            return 0;
+        }
+        SDL_SetWindowSize(g_window, g_windowed_w, g_windowed_h);
+        SDL_SetWindowPosition(g_window, g_windowed_x, g_windowed_y);
+        __atomic_store_n(&g_native_fullscreen, 0, __ATOMIC_RELAXED);
+    }
+    int w, h;
+    SDL_Vulkan_GetDrawableSize(g_window, &w, &h);
+    platform_update_user_screen_size();
+    LOG("platform: %s drawable %dx%d", g_native_fullscreen ? "native fullscreen" : "windowed", w, h);
+    return 1;
+}
+
+static void platform_toggle_fullscreen(void) {
+    platform_call_main_thread(platform_toggle_fullscreen_main, NULL);
+}
+
 static int platform_change_mouse_capture(int captured, int user_request) {
     captured = !!captured;
     if (user_request)
@@ -175,9 +220,27 @@ void platform_init(void) {
     flags |= SDL_WINDOW_FULLSCREEN;
     SDL_DisplayMode dm;
     if (SDL_GetDesktopDisplayMode(0, &dm) == 0) { w = dm.w; h = dm.h; }
+#elif defined(__APPLE__)
+    const char *fullscreen = getenv("LB_FULLSCREEN");
+    g_native_fullscreen = fullscreen && *fullscreen && strcmp(fullscreen, "0");
+    flags |= SDL_WINDOW_RESIZABLE | SDL_WINDOW_ALLOW_HIGHDPI;
+    g_windowed_w = w;
+    g_windowed_h = h;
+    if (g_native_fullscreen) {
+        SDL_DisplayMode dm;
+        if (SDL_GetDesktopDisplayMode(0, &dm) == 0) { w = dm.w; h = dm.h; }
+        flags |= SDL_WINDOW_FULLSCREEN_DESKTOP;
+    }
 #endif
     g_window = SDL_CreateWindow(GAME_TITLE, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, w, h, flags);
     if (!g_window) rt_fatal("SDL_CreateWindow: %s", SDL_GetError());
+#ifdef __APPLE__
+    if (g_native_fullscreen) SDL_Vulkan_GetDrawableSize(g_window, &w, &h);
+    else {
+        SDL_GetWindowPosition(g_window, &g_windowed_x, &g_windowed_y);
+        SDL_GetWindowSize(g_window, &g_windowed_w, &g_windowed_h);
+    }
+#endif
 #ifdef __APPLE__
     SDL_SetWindowData(g_window, "lb.main-thread-dispatcher", &g_main_dispatcher);
     platform_refresh_mouse_state();
@@ -185,11 +248,20 @@ void platform_init(void) {
 #endif
     extern void user32_set_screen(int, int);
     user32_set_screen(w, h);
-    LOG("platform: window %dx%d", w, h);
+    LOG("platform: %s %dx%d", g_native_fullscreen ? "native fullscreen drawable" : "window", w, h);
     load_key_script();
 }
 
 void *platform_window(void) { return g_window; }
+int platform_native_fullscreen_active(void) { return __atomic_load_n(&g_native_fullscreen, __ATOMIC_RELAXED); }
+void platform_drawable_size(int *w, int *h) {
+    if (!g_window) return;
+#ifdef __APPLE__
+    SDL_Vulkan_GetDrawableSize(g_window, w, h);
+#else
+    SDL_GetWindowSize(g_window, w, h);
+#endif
+}
 
 void platform_get_mouse(int *x, int *y) {
 #ifdef __APPLE__
@@ -465,6 +537,17 @@ static int platform_get_event(SDL_Event *e) {
 
 #ifdef __APPLE__
 static int platform_handle_mouse_capture_event(const SDL_Event *e) {
+    if (e->type == SDL_KEYDOWN && !e->key.repeat && (e->key.keysym.mod & KMOD_GUI) &&
+        (e->key.keysym.sym == SDLK_RETURN || e->key.keysym.sym == SDLK_KP_ENTER)) {
+        g_fullscreen_toggle_key_held = 1;
+        platform_toggle_fullscreen();
+        return 1;
+    }
+    if (e->type == SDL_KEYUP && g_fullscreen_toggle_key_held &&
+        (e->key.keysym.sym == SDLK_RETURN || e->key.keysym.sym == SDLK_KP_ENTER)) {
+        g_fullscreen_toggle_key_held = 0;
+        return 1;
+    }
     if (e->type == SDL_KEYDOWN && e->key.keysym.scancode == SDL_SCANCODE_ESCAPE && !e->key.repeat) {
         platform_set_mouse_captured(0);
         return 0;
@@ -485,11 +568,21 @@ static int platform_handle_mouse_capture_event(const SDL_Event *e) {
         return 1;
     if (e->type == SDL_WINDOWEVENT) {
         if (e->window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+            g_fullscreen_toggle_key_held = 0;
             __atomic_store_n(&g_capture_suppressed_buttons, 0, __ATOMIC_RELAXED);
             platform_change_mouse_capture(0, 0);
         } else if (e->window.event == SDL_WINDOWEVENT_FOCUS_GAINED &&
                    __atomic_load_n(&g_mouse_capture_requested, __ATOMIC_RELAXED)) {
             platform_change_mouse_capture(1, 0);
+        }
+        if (e->window.event == SDL_WINDOWEVENT_SIZE_CHANGED || e->window.event == SDL_WINDOWEVENT_RESIZED) {
+            int fullscreen = (SDL_GetWindowFlags(g_window) & SDL_WINDOW_FULLSCREEN) != 0;
+            __atomic_store_n(&g_native_fullscreen, fullscreen, __ATOMIC_RELAXED);
+            if (!fullscreen) {
+                SDL_GetWindowPosition(g_window, &g_windowed_x, &g_windowed_y);
+                SDL_GetWindowSize(g_window, &g_windowed_w, &g_windowed_h);
+            }
+            platform_update_user_screen_size();
         }
     }
     return 0;
@@ -543,5 +636,8 @@ void platform_present_hook(void) {
         last = v;
     }
 }
-void platform_window_size(int *w, int *h) { if (g_window) SDL_GetWindowSize(g_window, w, h); }
+void platform_window_size(int *w, int *h) {
+    if (!g_window) return;
+    SDL_GetWindowSize(g_window, w, h);
+}
 int platform_frame_count(void) { return g_frames; }
