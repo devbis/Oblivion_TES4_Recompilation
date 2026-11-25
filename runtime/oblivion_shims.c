@@ -5,7 +5,15 @@
  * its shims, so it is harmless elsewhere. */
 #define _GNU_SOURCE
 #include "rt.h"
+#include <ctype.h>
 #include <string.h>
+#include <strings.h>
+#include <fcntl.h>
+#include <unistd.h>
+#include <sys/stat.h>
+#ifdef __APPLE__
+#include <zlib.h>
+#endif
 
 /* ===================== WINMM: mmio (RIFF/WAVE files) =====================
  * Oblivion parses its WAV files with mmioOpen / mmioDescend / mmioRead, from
@@ -33,6 +41,210 @@ typedef struct { uint32_t buf, size, pos; int owned; } Mmio;
 static Mmio *g_mmio[MMIO_SLOTS];
 static pthread_mutex_t g_mmio_lock = PTHREAD_MUTEX_INITIALIZER;
 
+/* Oblivion stores nearly all WAV effects in its version-103 Sounds BSA.
+ * The WinMM mmio API accepts a pathname, so resolve missing loose files from
+ * that archive before reporting MMIOERR_FILENOTFOUND. */
+typedef struct {
+    char path[512];
+    uint32_t size, offset;
+    uint8_t compression_toggle;
+} BsaSoundEntry;
+typedef struct { char name[260]; uint32_t count; } BsaSoundFolder;
+typedef struct { uint32_t size, offset; uint16_t folder; uint8_t toggle; } BsaSoundRaw;
+static BsaSoundEntry *g_bsa_sounds;
+static size_t g_bsa_sound_count;
+static int g_bsa_sound_fd = -1;
+static int g_bsa_sound_compressed, g_bsa_sound_index_state;
+static pthread_mutex_t g_bsa_sound_lock = PTHREAD_MUTEX_INITIALIZER;
+
+static uint32_t bsa_le32(const uint8_t *p) {
+    return (uint32_t)p[0] | (uint32_t)p[1] << 8 | (uint32_t)p[2] << 16 | (uint32_t)p[3] << 24;
+}
+
+static int bsa_pread_all(int fd, void *buf, size_t n, off_t off) {
+    uint8_t *p = buf;
+    while (n) {
+        ssize_t got = pread(fd, p, n, off);
+        if (got <= 0) return 0;
+        p += (size_t)got;
+        n -= (size_t)got;
+        off += got;
+    }
+    return 1;
+}
+
+static void bsa_normalize_path(char *path) {
+    for (char *p = path; *p; p++) {
+        if (*p == '\\') *p = '/';
+        else *p = (char)tolower((unsigned char)*p);
+    }
+    while (!strncmp(path, "./", 2)) memmove(path, path + 2, strlen(path + 2) + 1);
+    if (!strncmp(path, "data/", 5)) memmove(path, path + 5, strlen(path + 5) + 1);
+}
+
+static int bsa_sound_index_init(void) {
+    if (g_bsa_sound_index_state) return g_bsa_sound_index_state > 0;
+    g_bsa_sound_index_state = -1;
+    char archive[1024];
+    if (!rt_host_path("Data/Oblivion - Sounds.bsa", archive, sizeof archive)) return 0;
+    int fd = open(archive, O_RDONLY);
+    if (fd < 0) return 0;
+    struct stat st;
+    uint8_t header[36];
+    if (fstat(fd, &st) || st.st_size < (off_t)sizeof header ||
+        !bsa_pread_all(fd, header, sizeof header, 0) || memcmp(header, "BSA\0", 4)) {
+        close(fd);
+        return 0;
+    }
+    uint32_t version = bsa_le32(header + 4);
+    uint32_t folders_offset = bsa_le32(header + 8);
+    uint32_t flags = bsa_le32(header + 12);
+    uint32_t folder_count = bsa_le32(header + 16);
+    uint32_t file_count = bsa_le32(header + 20);
+    uint32_t folder_names_remaining = bsa_le32(header + 24);
+    if (version != 103 || !(flags & 1) || !(flags & 2) ||
+        folders_offset < sizeof header || folders_offset > (uint64_t)st.st_size ||
+        folder_count > 65535 || file_count > 200000) {
+        close(fd);
+        return 0;
+    }
+    BsaSoundFolder *folders = calloc(folder_count ? folder_count : 1, sizeof *folders);
+    BsaSoundRaw *raw = calloc(file_count ? file_count : 1, sizeof *raw);
+    BsaSoundEntry *entries = calloc(file_count ? file_count : 1, sizeof *entries);
+    if (!folders || !raw || !entries) {
+        free(folders); free(raw); free(entries); close(fd);
+        return 0;
+    }
+    off_t pos = folders_offset;
+    uint64_t total = 0;
+    int ok = 1;
+    for (uint32_t i = 0; i < folder_count; i++) {
+        uint8_t rec[16];
+        if (!bsa_pread_all(fd, rec, sizeof rec, pos)) { ok = 0; break; }
+        folders[i].count = bsa_le32(rec + 8);
+        total += folders[i].count;
+        pos += sizeof rec;
+        if (total > file_count) { ok = 0; break; }
+    }
+    uint32_t ri = 0;
+    for (uint32_t i = 0; ok && i < folder_count; i++) {
+        uint8_t n;
+        if (!bsa_pread_all(fd, &n, 1, pos) || n == 0 || n > sizeof folders[i].name) { ok = 0; break; }
+        if (n > folder_names_remaining) { ok = 0; break; }
+        folder_names_remaining -= n;
+        pos++;
+        if (!bsa_pread_all(fd, folders[i].name, n, pos)) { ok = 0; break; }
+        pos += n;
+        if (!memchr(folders[i].name, 0, n)) { ok = 0; break; }
+        folders[i].name[sizeof folders[i].name - 1] = 0;
+        size_t flen = strnlen(folders[i].name, sizeof folders[i].name);
+        if (flen && folders[i].name[flen - 1] == 0) folders[i].name[flen - 1] = 0;
+        bsa_normalize_path(folders[i].name);
+        for (uint32_t j = 0; j < folders[i].count; j++, ri++) {
+            uint8_t rec[16];
+            if (!bsa_pread_all(fd, rec, sizeof rec, pos)) { ok = 0; break; }
+            uint32_t size_word = bsa_le32(rec + 8);
+            raw[ri] = (BsaSoundRaw){
+                .size = size_word & 0x3fffffffu,
+                .offset = bsa_le32(rec + 12),
+                .folder = (uint16_t)i,
+                .toggle = (size_word & 0x40000000u) != 0,
+            };
+            pos += sizeof rec;
+        }
+    }
+    if (ok) {
+        if ((uint64_t)pos + folder_names_remaining > (uint64_t)st.st_size) ok = 0;
+        else pos += folder_names_remaining;
+    }
+    for (uint32_t i = 0; ok && i < ri; i++) {
+        char name[256];
+        size_t n = 0;
+        for (;;) {
+            uint8_t c;
+            if (!bsa_pread_all(fd, &c, 1, pos++)) { ok = 0; break; }
+            if (!c) break;
+            if (n + 1 >= sizeof name) { ok = 0; break; }
+            name[n++] = (char)c;
+        }
+        if (!ok) break;
+        name[n] = 0;
+        bsa_normalize_path(name);
+        BsaSoundEntry *e = &entries[i];
+        int written = snprintf(e->path, sizeof e->path, "%s/%s", folders[raw[i].folder].name, name);
+        if (written < 0 || (size_t)written >= sizeof e->path) { ok = 0; break; }
+        e->size = raw[i].size;
+        e->offset = raw[i].offset;
+        e->compression_toggle = raw[i].toggle;
+        if ((uint64_t)e->offset + e->size > (uint64_t)st.st_size) { ok = 0; break; }
+    }
+    free(folders);
+    free(raw);
+    if (!ok || ri != file_count) {
+        free(entries);
+        close(fd);
+        return 0;
+    }
+    g_bsa_sounds = entries;
+    g_bsa_sound_count = ri;
+    g_bsa_sound_fd = fd;
+    g_bsa_sound_compressed = (flags & 4) != 0;
+    g_bsa_sound_index_state = 1;
+    LOG("sound archive: indexed Oblivion - Sounds.bsa (%u files, compressed-by-default=%d)",
+        (unsigned)g_bsa_sound_count, g_bsa_sound_compressed);
+    return 1;
+}
+
+static uint32_t bsa_sound_load(const char *guest_path, uint32_t *size_out) {
+    char key[512];
+    if (snprintf(key, sizeof key, "%s", guest_path) >= (int)sizeof key) return 0;
+    bsa_normalize_path(key);
+    pthread_mutex_lock(&g_bsa_sound_lock);
+    if (!bsa_sound_index_init()) { pthread_mutex_unlock(&g_bsa_sound_lock); return 0; }
+    const BsaSoundEntry *found = NULL;
+    for (size_t i = 0; i < g_bsa_sound_count; i++)
+        if (!strcmp(g_bsa_sounds[i].path, key)) { found = &g_bsa_sounds[i]; break; }
+    if (!found) { pthread_mutex_unlock(&g_bsa_sound_lock); return 0; }
+    BsaSoundEntry entry = *found;
+    int fd = g_bsa_sound_fd;
+    int compressed = g_bsa_sound_compressed != entry.compression_toggle;
+    pthread_mutex_unlock(&g_bsa_sound_lock);
+
+    if (entry.size > 64u * 1024u * 1024u) return 0;
+    uint8_t *data = NULL;
+    uint32_t data_size = entry.size;
+    if (compressed) {
+#ifdef __APPLE__
+        uint8_t sizebuf[4];
+        if (entry.size < 4 || !bsa_pread_all(fd, sizebuf, sizeof sizebuf, entry.offset)) return 0;
+        data_size = bsa_le32(sizebuf);
+        if (data_size > 64u * 1024u * 1024u) return 0;
+        uLongf out_len = data_size;
+        size_t compressed_len = entry.size - 4u;
+        uint8_t *compressed_data = malloc(compressed_len ? compressed_len : 1);
+        data = malloc(data_size ? data_size : 1);
+        if (!compressed_data || !data ||
+            !bsa_pread_all(fd, compressed_data, compressed_len, (off_t)entry.offset + 4) ||
+            uncompress(data, &out_len, compressed_data, compressed_len) != Z_OK || out_len > data_size) {
+            free(compressed_data); free(data); return 0;
+        }
+        free(compressed_data);
+        data_size = (uint32_t)out_len;
+#else
+        return 0;
+#endif
+    } else {
+        data = malloc(data_size ? data_size : 1);
+        if (!data || !bsa_pread_all(fd, data, data_size, entry.offset)) { free(data); return 0; }
+    }
+    uint32_t guest_buf = gmalloc(data_size ? data_size : 1);
+    if (!guest_buf) { free(data); return 0; }
+    memcpy(MEM + guest_buf, data, data_size);
+    free(data);
+    *size_out = data_size;
+    return guest_buf;
+}
+
 static Mmio *mm_get(uint32_t h) {
     if (h < MMIO_BASE || h >= MMIO_BASE + 4 * MMIO_SLOTS || ((h - MMIO_BASE) & 3)) return NULL;
     return g_mmio[(h - MMIO_BASE) / 4];
@@ -54,7 +266,11 @@ SHIM(mmioOpenA) {
         char host[1024];
         rt_host_path(GSTR(name), host, sizeof host);
         FILE *f = fopen(host, "rb");
-        if (!f) err = MMIOERR_FILENOTFOUND;
+        if (!f) {
+            m->buf = bsa_sound_load(GSTR(name), &m->size);
+            if (m->buf) m->owned = 1;
+            else err = MMIOERR_FILENOTFOUND;
+        }
         else {
             fseek(f, 0, SEEK_END);
             long n = ftell(f);

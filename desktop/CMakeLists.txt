@@ -1,5 +1,8 @@
 cmake_minimum_required(VERSION 3.18)
 project(oblivion_desktop C CXX)
+if(APPLE)
+  enable_language(OBJC)
+endif()
 
 set(CMAKE_C_STANDARD 11)
 set(CMAKE_C_STANDARD_REQUIRED ON)
@@ -27,6 +30,9 @@ get_filename_component(PORT ${CMAKE_CURRENT_SOURCE_DIR}/.. ABSOLUTE)
 file(GLOB GEN_SRC ${PORT}/gen/*.c)
 file(GLOB RT_SRC ${PORT}/runtime/*.c)
 file(GLOB RT_CXX ${PORT}/runtime/*.cpp)
+if(APPLE)
+  file(GLOB RT_OBJC ${PORT}/runtime/*.m)
+endif()
 if(NOT GEN_SRC)
   message(FATAL_ERROR "No generated code in ${PORT}/gen. Run desktop/build.sh with the game data directory.")
 endif()
@@ -37,7 +43,7 @@ target_include_directories(lbgen PRIVATE ${PORT}/runtime ${PORT}/gen)
 target_compile_definitions(lbgen PRIVATE GAME_OBLIVION)
 target_compile_options(lbgen PRIVATE -O2 -g0 -fno-strict-aliasing -fwrapv -fsigned-char -w -fPIC)
 
-add_executable(lb ${RT_SRC} ${RT_CXX} $<TARGET_OBJECTS:lbgen>)
+add_executable(lb ${RT_SRC} ${RT_CXX} ${RT_OBJC} $<TARGET_OBJECTS:lbgen>)
 target_include_directories(lb PRIVATE
     ${PORT}/runtime ${PORT}/gen
     ${PORT}/android/app/jni/sdlinc
@@ -46,8 +52,13 @@ target_include_directories(lb PRIVATE
     ${PORT}/android/app/jni/dxvk/include/native)
 target_compile_definitions(lb PRIVATE GAME_OBLIVION DXVK_NATIVE)
 target_compile_options(lb PRIVATE -O2 -fno-strict-aliasing -fwrapv -fsigned-char -Wno-everything
-    "$<$<COMPILE_LANGUAGE:C>:-std=gnu11>")
+    "$<$<COMPILE_LANGUAGE:C>:-std=gnu11>"
+    "$<$<COMPILE_LANGUAGE:OBJC>:-fobjc-arc>")
 target_link_libraries(lb PRIVATE SDL2 dxvk_d3d9 m)
+if(APPLE)
+  find_package(ZLIB REQUIRED)
+  target_link_libraries(lb PRIVATE "-framework AVFoundation" "-framework Foundation" ZLIB::ZLIB)
+endif()
 
 set_target_properties(lb PROPERTIES BUILD_RPATH_USE_ORIGIN TRUE)
 if(APPLE)

@@ -38,10 +38,37 @@ SHIM(CoInitialize) { RET(0, 1); }
 SHIM(CoInitializeEx) { RET(0, 2); }
 SHIM(CoUninitialize) { RET(0, 0); }
 SHIM(CoCreateInstance) {
+    extern int dshow_create(uint32_t clsid, uint32_t iid, uint32_t *out, uint32_t *hr);
     extern int xaudio2_create(uint32_t clsid, uint32_t *out);
     uint32_t obj;
+    uint32_t hr;
+    if (ARG(4) && dshow_create(ARG(0), ARG(3), &obj, &hr)) {
+        M32(ARG(4)) = obj;
+        RET(hr, 5);
+    }
     if (ARG(4) && xaudio2_create(ARG(0), &obj)) { M32(ARG(4)) = obj; RET(0, 5); }
-    LOG("CoCreateInstance -> E_NOINTERFACE");
+    /* Keep a once-per-class record so unsupported media COM classes can be
+     * identified without flooding the log when the game retries playback. */
+    static uint8_t seen[16][32];
+    static unsigned nseen;
+    static pthread_mutex_t seen_lock = PTHREAD_MUTEX_INITIALIZER;
+    uint8_t ids[32] = {0};
+    if (ARG(0)) memcpy(ids, MEM + ARG(0), 16);
+    if (ARG(3)) memcpy(ids + 16, MEM + ARG(3), 16);
+    int known = 0;
+    pthread_mutex_lock(&seen_lock);
+    for (unsigned i = 0; i < nseen; i++)
+        if (!memcmp(seen[i], ids, sizeof ids)) { known = 1; break; }
+    if (!known) {
+        if (nseen < sizeof seen / sizeof seen[0]) memcpy(seen[nseen++], ids, sizeof ids);
+    }
+    pthread_mutex_unlock(&seen_lock);
+    if (!known) {
+        uint32_t g[8];
+        memcpy(g, ids, sizeof g);
+        LOG("CoCreateInstance CLSID=%08x:%08x:%08x:%08x IID=%08x:%08x:%08x:%08x -> E_NOINTERFACE",
+            g[0], g[1], g[2], g[3], g[4], g[5], g[6], g[7]);
+    }
     if (ARG(4)) M32(ARG(4)) = 0;
     RET(0x80004002u, 5);
 }

@@ -43,7 +43,10 @@ static uint16_t skip_tap(void) {
 static const struct { SDL_Keycode key; uint16_t bit; } k_keymap[] = {
     {SDLK_UP, 0x1}, {SDLK_DOWN, 0x2}, {SDLK_LEFT, 0x4}, {SDLK_RIGHT, 0x8},
     {SDLK_RETURN, 0x10}, {SDLK_ESCAPE, 0x20}, {SDLK_SPACE, 0x1000}, {SDLK_LCTRL, 0x2000},
-    {SDLK_LSHIFT, 0x4000}, {SDLK_TAB, 0x8000}, {SDLK_q, 0x100}, {SDLK_e, 0x200},
+#ifndef GAME_OBLIVION
+    {SDLK_LSHIFT, 0x4000},
+#endif
+    {SDLK_TAB, 0x8000}, {SDLK_q, 0x100}, {SDLK_e, 0x200},
 };
 
 void input_set_virtual(uint16_t buttons, int16_t lx, int16_t ly, int16_t rx, int16_t ry, uint8_t lt, uint8_t rt) {

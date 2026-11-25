@@ -5,8 +5,6 @@
 #include <SDL2/SDL.h>
 
 #define MIX_RATE 44100
-#define MAX_BUFFERS 512
-
 typedef struct {
     uint32_t data;      /* guest address */
     uint32_t size;      /* bytes */
@@ -35,7 +33,8 @@ static struct { float pos[3], vel[3], front[3], top[3], dist_factor, rolloff, do
 
 static HComClass k_ds8, k_dsb, k_ds3db, k_ds3dl;
 static SDL_mutex *g_mix_lock;
-static DSBuf *g_bufs[MAX_BUFFERS];
+static DSBuf **g_bufs;
+static size_t g_nbufs, g_bufcap;
 static SDL_AudioDeviceID g_dev;
 static float g_master = 1.0f;
 
@@ -83,7 +82,7 @@ static void mix_cb(void *ud, Uint8 *stream, int len) {
     int frames = len / (int)(2 * sizeof(float));
     memset(stream, 0, (size_t)len);
     SDL_LockMutex(g_mix_lock);
-    for (int k = 0; k < MAX_BUFFERS; k++) {
+    for (size_t k = 0; k < g_nbufs; k++) {
         DSBuf *b = g_bufs[k];
         if (!b || b->primary || !b->playing || !b->d->size) continue;
         uint32_t bpf = (uint32_t)(b->channels * b->bits / 8);
@@ -136,8 +135,23 @@ static void audio_open(void) {
 
 static uint32_t buf_register(DSBuf *b) {
     SDL_LockMutex(g_mix_lock);
-    for (int k = 0; k < MAX_BUFFERS; k++)
-        if (!g_bufs[k]) { g_bufs[k] = b; break; }
+    size_t slot = 0;
+    while (slot < g_nbufs && g_bufs[slot]) slot++;
+    if (slot == g_nbufs) {
+        if (g_nbufs == g_bufcap) {
+            size_t cap = g_bufcap ? g_bufcap * 2 : 64;
+            DSBuf **bufs = realloc(g_bufs, cap * sizeof *g_bufs);
+            if (!bufs) {
+                SDL_UnlockMutex(g_mix_lock);
+                rt_fatal("out of memory growing DirectSound buffer table");
+            }
+            memset(bufs + g_bufcap, 0, (cap - g_bufcap) * sizeof *bufs);
+            g_bufs = bufs;
+            g_bufcap = cap;
+        }
+        g_nbufs++;
+    }
+    g_bufs[slot] = b;
     SDL_UnlockMutex(g_mix_lock);
     b->guest = hcom_new(&k_dsb, b);
     return b->guest;
@@ -145,7 +159,7 @@ static uint32_t buf_register(DSBuf *b) {
 
 static void buf_destroy(DSBuf *b) {
     SDL_LockMutex(g_mix_lock);
-    for (int k = 0; k < MAX_BUFFERS; k++)
+    for (size_t k = 0; k < g_nbufs; k++)
         if (g_bufs[k] == b) g_bufs[k] = NULL;
     SDL_UnlockMutex(g_mix_lock);
     if (--b->d->refs == 0) {
