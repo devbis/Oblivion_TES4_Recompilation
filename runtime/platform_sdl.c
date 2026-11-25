@@ -15,6 +15,7 @@ static int g_mouse_screen_x, g_mouse_screen_y;
 static int g_window_screen_x, g_window_screen_y;
 static int g_mouse_captured;
 static int g_mouse_capture_requested = 1;
+static Uint32 g_capture_suppressed_buttons;
 typedef int (*PlatformMainCallFn)(void *);
 typedef struct { int (*call)(PlatformMainCallFn, void *); } PlatformMainDispatcher;
 typedef struct PlatformMainCall {
@@ -124,7 +125,8 @@ void platform_set_mouse_captured(int captured) {
 
 int platform_mouse_is_captured(void) {
 #ifdef __APPLE__
-    return __atomic_load_n(&g_mouse_captured, __ATOMIC_RELAXED);
+    return __atomic_load_n(&g_mouse_captured, __ATOMIC_RELAXED) &&
+           !__atomic_load_n(&g_capture_suppressed_buttons, __ATOMIC_RELAXED);
 #else
     return 1;
 #endif
@@ -462,24 +464,35 @@ static int platform_get_event(SDL_Event *e) {
 }
 
 #ifdef __APPLE__
-static void platform_handle_mouse_capture_event(const SDL_Event *e) {
+static int platform_handle_mouse_capture_event(const SDL_Event *e) {
     if (e->type == SDL_KEYDOWN && e->key.keysym.scancode == SDL_SCANCODE_ESCAPE && !e->key.repeat) {
         platform_set_mouse_captured(0);
-        return;
+        return 0;
     }
     if (e->type == SDL_MOUSEBUTTONDOWN &&
         !__atomic_load_n(&g_mouse_captured, __ATOMIC_RELAXED)) {
+        __atomic_fetch_or(&g_capture_suppressed_buttons, SDL_BUTTON(e->button.button), __ATOMIC_RELAXED);
         platform_set_mouse_captured(1);
-        return;
+        return 1;
     }
+    if (e->type == SDL_MOUSEBUTTONUP &&
+        (__atomic_load_n(&g_capture_suppressed_buttons, __ATOMIC_RELAXED) & SDL_BUTTON(e->button.button))) {
+        __atomic_fetch_and(&g_capture_suppressed_buttons, ~SDL_BUTTON(e->button.button), __ATOMIC_RELAXED);
+        return 1;
+    }
+    if (e->type == SDL_MOUSEMOTION &&
+        __atomic_load_n(&g_capture_suppressed_buttons, __ATOMIC_RELAXED))
+        return 1;
     if (e->type == SDL_WINDOWEVENT) {
         if (e->window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+            __atomic_store_n(&g_capture_suppressed_buttons, 0, __ATOMIC_RELAXED);
             platform_change_mouse_capture(0, 0);
         } else if (e->window.event == SDL_WINDOWEVENT_FOCUS_GAINED &&
                    __atomic_load_n(&g_mouse_capture_requested, __ATOMIC_RELAXED)) {
             platform_change_mouse_capture(1, 0);
         }
     }
+    return 0;
 }
 #endif
 
@@ -493,7 +506,7 @@ void platform_present_hook(void) {
             exit(0);
         }
 #ifdef __APPLE__
-        platform_handle_mouse_capture_event(&e);
+        if (platform_handle_mouse_capture_event(&e)) continue;
         if (!__atomic_load_n(&g_mouse_captured, __ATOMIC_RELAXED) &&
             (e.type == SDL_MOUSEMOTION || e.type == SDL_MOUSEWHEEL))
             continue;
