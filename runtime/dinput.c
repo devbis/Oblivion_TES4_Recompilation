@@ -117,6 +117,8 @@ SHIM(dev_GetDeviceState) {
     } else {
         int x, y;
         Uint32 b = SDL_GetRelativeMouseState(&x, &y);
+        extern int platform_mouse_is_captured(void);
+        if (!platform_mouse_is_captured()) { x = 0; y = 0; b = 0; }
         int wheel = 0;
         uint8_t vb[3] = {0, 0, 0};
 #ifdef GAME_OBLIVION
@@ -172,6 +174,8 @@ SHIM(dev_GetDeviceData) {
         int x, y, w = 0, dx = 0, dy = 0;
         uint8_t vb[3] = {0}, vk[256] = {0};
         Uint32 bs = SDL_GetRelativeMouseState(&x, &y);
+        extern int platform_mouse_is_captured(void);
+        if (!platform_mouse_is_captured()) { x = 0; y = 0; bs = 0; }
         input_kbm_poll(vk, &dx, &dy, &w, vb, 1);
         x += dx; y += dy;
         uint8_t cur[3];

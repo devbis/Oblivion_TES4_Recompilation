@@ -228,8 +228,20 @@ SHIM(GetPixel) { RET(0, 3); }
 SHIM(SetPixel) { RET(0, 4); }
 SHIM(CreateCompatibleBitmap) { RET(0x30003, 3); }
 SHIM(GetWindowThreadProcessId) { if (ARG(1)) M32(ARG(1)) = 0x42; RET(1, 2); }
-SHIM(ClientToScreen) { RET(1, 2); }
-SHIM(ScreenToClient) { RET(1, 2); }
+SHIM(ClientToScreen) {
+    int x = (int32_t)M32(ARG(1)), y = (int32_t)M32(ARG(1) + 4);
+    extern void platform_client_to_screen(int *, int *);
+    platform_client_to_screen(&x, &y);
+    M32(ARG(1)) = (uint32_t)x; M32(ARG(1) + 4) = (uint32_t)y;
+    RET(1, 2);
+}
+SHIM(ScreenToClient) {
+    int x = (int32_t)M32(ARG(1)), y = (int32_t)M32(ARG(1) + 4);
+    extern void platform_screen_to_client(int *, int *);
+    platform_screen_to_client(&x, &y);
+    M32(ARG(1)) = (uint32_t)x; M32(ARG(1) + 4) = (uint32_t)y;
+    RET(1, 2);
+}
 SHIM(GetCursorPos) {
     int x = 0, y = 0;
     extern void platform_get_mouse(int *, int *);
@@ -239,7 +251,15 @@ SHIM(GetCursorPos) {
     RET(1, 1);
 }
 static void put_rect(uint32_t p) { M32(p) = 0; M32(p + 4) = 0; M32(p + 8) = (uint32_t)g_screen_w; M32(p + 12) = (uint32_t)g_screen_h; }
-SHIM(GetWindowRect) { put_rect(ARG(1)); RET(1, 2); }
+SHIM(GetWindowRect) {
+    uint32_t p = ARG(1);
+    int x = 0, y = 0;
+    extern void platform_get_window_position(int *, int *);
+    platform_get_window_position(&x, &y);
+    M32(p) = (uint32_t)x; M32(p + 4) = (uint32_t)y;
+    M32(p + 8) = (uint32_t)(x + g_screen_w); M32(p + 12) = (uint32_t)(y + g_screen_h);
+    RET(1, 2);
+}
 SHIM(GetClientRect) { put_rect(ARG(1)); RET(1, 2); }
 SHIM(GetDeviceCaps) { uint32_t i = ARG(1); RET(i == 12 ? 32 : i == 8 ? g_screen_w : i == 10 ? g_screen_h : i == 116 ? 60 : 0, 2); }
 

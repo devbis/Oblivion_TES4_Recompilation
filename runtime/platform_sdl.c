@@ -11,6 +11,10 @@ static SDL_Window *g_window;
 static int g_frames;
 static void load_key_script(void);
 #ifdef __APPLE__
+static int g_mouse_screen_x, g_mouse_screen_y;
+static int g_window_screen_x, g_window_screen_y;
+static int g_mouse_captured;
+static int g_mouse_capture_requested = 1;
 typedef int (*PlatformMainCallFn)(void *);
 typedef struct { int (*call)(PlatformMainCallFn, void *); } PlatformMainDispatcher;
 typedef struct PlatformMainCall {
@@ -58,29 +62,98 @@ static void platform_run_main_calls(void) {
     }
 }
 
-static int platform_apply_cursor_mode(void *arg) {
-    int hidden = *(int *)arg;
-    SDL_ShowCursor(hidden ? SDL_DISABLE : SDL_ENABLE);
-    int rc = SDL_SetRelativeMouseMode(hidden ? SDL_TRUE : SDL_FALSE);
-    if (rc < 0) LOG("SDL_SetRelativeMouseMode: %s", SDL_GetError());
-    return rc == 0;
+/* SDL's mouse coordinates are client-relative, including the virtual cursor
+ * used by relative mode. Convert them with the cached window origin. */
+static void platform_sample_mouse_state(void) {
+    int x = 0, y = 0, wx = 0, wy = 0;
+    SDL_GetMouseState(&x, &y);
+    SDL_GetWindowPosition(g_window, &wx, &wy);
+    __atomic_store_n(&g_mouse_screen_x, wx + x, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_mouse_screen_y, wy + y, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_window_screen_x, wx, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_window_screen_y, wy, __ATOMIC_RELAXED);
+}
+
+static void platform_refresh_mouse_state(void) {
+    if (__atomic_load_n(&g_mouse_captured, __ATOMIC_RELAXED))
+        platform_sample_mouse_state();
+}
+
+static int platform_apply_mouse_capture(void *arg) {
+    int captured = *(int *)arg;
+    platform_sample_mouse_state();
+    if (captured) {
+        SDL_RaiseWindow(g_window);
+        SDL_SetWindowGrab(g_window, SDL_TRUE);
+        SDL_ShowCursor(SDL_DISABLE);
+        if (SDL_SetRelativeMouseMode(SDL_TRUE) < 0) {
+            LOG("SDL_SetRelativeMouseMode(enable): %s", SDL_GetError());
+            SDL_SetWindowGrab(g_window, SDL_FALSE);
+            SDL_ShowCursor(SDL_ENABLE);
+            return 0;
+        }
+    } else {
+        int rc = SDL_SetRelativeMouseMode(SDL_FALSE);
+        SDL_SetWindowGrab(g_window, SDL_FALSE);
+        SDL_ShowCursor(SDL_ENABLE);
+        if (rc < 0) LOG("SDL_SetRelativeMouseMode(disable): %s", SDL_GetError());
+        return rc == 0;
+    }
+    return 1;
+}
+
+static int platform_apply_cursor_visibility(void *arg) {
+    int visible = *(int *)arg;
+    SDL_ShowCursor(visible ? SDL_ENABLE : SDL_DISABLE);
+    return 1;
+}
+
+static int platform_change_mouse_capture(int captured, int user_request) {
+    captured = !!captured;
+    if (user_request)
+        __atomic_store_n(&g_mouse_capture_requested, captured, __ATOMIC_RELAXED);
+    if (__atomic_load_n(&g_mouse_captured, __ATOMIC_RELAXED) == captured) return 1;
+    int ok = platform_call_main_thread(platform_apply_mouse_capture, &captured);
+    if (ok) __atomic_store_n(&g_mouse_captured, captured, __ATOMIC_RELAXED);
+    return ok;
+}
+
+void platform_set_mouse_captured(int captured) {
+    platform_change_mouse_capture(captured, 1);
+}
+
+int platform_mouse_is_captured(void) {
+#ifdef __APPLE__
+    return __atomic_load_n(&g_mouse_captured, __ATOMIC_RELAXED);
+#else
+    return 1;
+#endif
 }
 
 void platform_set_cursor_hidden(int hidden) {
-    static int current = -1;
-    hidden = !!hidden;
-    if (current == hidden) return;
-    current = hidden;
-    platform_call_main_thread(platform_apply_cursor_mode, &hidden);
+    (void)hidden;
+    /* ShowCursor is still counted for the game, but Esc explicitly releases
+     * capture and leaves the system cursor visible until the next click. */
+    int visible = !__atomic_load_n(&g_mouse_captured, __ATOMIC_RELAXED);
+    platform_call_main_thread(platform_apply_cursor_visibility, &visible);
 }
 
 static int platform_warp_mouse_main(void *arg) {
     int *xy = arg;
+#ifdef __APPLE__
+    int wx = 0, wy = 0;
+    SDL_GetWindowPosition(g_window, &wx, &wy);
+    xy[0] -= wx;
+    xy[1] -= wy;
+#endif
     SDL_WarpMouseInWindow(g_window, xy[0], xy[1]);
     return 1;
 }
 
 void platform_warp_mouse(int x, int y) {
+#ifdef __APPLE__
+    if (!__atomic_load_n(&g_mouse_captured, __ATOMIC_RELAXED)) return;
+#endif
     int xy[2] = {x, y};
     platform_call_main_thread(platform_warp_mouse_main, xy);
 }
@@ -105,6 +178,8 @@ void platform_init(void) {
     if (!g_window) rt_fatal("SDL_CreateWindow: %s", SDL_GetError());
 #ifdef __APPLE__
     SDL_SetWindowData(g_window, "lb.main-thread-dispatcher", &g_main_dispatcher);
+    platform_refresh_mouse_state();
+    platform_set_mouse_captured(1);
 #endif
     extern void user32_set_screen(int, int);
     user32_set_screen(w, h);
@@ -115,7 +190,36 @@ void platform_init(void) {
 void *platform_window(void) { return g_window; }
 
 void platform_get_mouse(int *x, int *y) {
+#ifdef __APPLE__
+    *x = __atomic_load_n(&g_mouse_screen_x, __ATOMIC_RELAXED);
+    *y = __atomic_load_n(&g_mouse_screen_y, __ATOMIC_RELAXED);
+#else
     SDL_GetMouseState(x, y);
+#endif
+}
+
+void platform_get_window_position(int *x, int *y) {
+#ifdef __APPLE__
+    *x = __atomic_load_n(&g_window_screen_x, __ATOMIC_RELAXED);
+    *y = __atomic_load_n(&g_window_screen_y, __ATOMIC_RELAXED);
+#else
+    *x = 0;
+    *y = 0;
+#endif
+}
+
+void platform_client_to_screen(int *x, int *y) {
+#ifdef __APPLE__
+    *x += __atomic_load_n(&g_window_screen_x, __ATOMIC_RELAXED);
+    *y += __atomic_load_n(&g_window_screen_y, __ATOMIC_RELAXED);
+#endif
+}
+
+void platform_screen_to_client(int *x, int *y) {
+#ifdef __APPLE__
+    *x -= __atomic_load_n(&g_window_screen_x, __ATOMIC_RELAXED);
+    *y -= __atomic_load_n(&g_window_screen_y, __ATOMIC_RELAXED);
+#endif
 }
 
 #ifndef __APPLE__
@@ -132,6 +236,7 @@ void platform_pump_events(void) {
 #ifdef __APPLE__
     SDL_PumpEvents();
     platform_run_main_calls();
+    platform_refresh_mouse_state();
 #endif
 }
 
@@ -356,6 +461,28 @@ static int platform_get_event(SDL_Event *e) {
 #endif
 }
 
+#ifdef __APPLE__
+static void platform_handle_mouse_capture_event(const SDL_Event *e) {
+    if (e->type == SDL_KEYDOWN && e->key.keysym.scancode == SDL_SCANCODE_ESCAPE && !e->key.repeat) {
+        platform_set_mouse_captured(0);
+        return;
+    }
+    if (e->type == SDL_MOUSEBUTTONDOWN &&
+        !__atomic_load_n(&g_mouse_captured, __ATOMIC_RELAXED)) {
+        platform_set_mouse_captured(1);
+        return;
+    }
+    if (e->type == SDL_WINDOWEVENT) {
+        if (e->window.event == SDL_WINDOWEVENT_FOCUS_LOST) {
+            platform_change_mouse_capture(0, 0);
+        } else if (e->window.event == SDL_WINDOWEVENT_FOCUS_GAINED &&
+                   __atomic_load_n(&g_mouse_capture_requested, __ATOMIC_RELAXED)) {
+            platform_change_mouse_capture(1, 0);
+        }
+    }
+}
+#endif
+
 void platform_present_hook(void) {
     SDL_Event e;
     poll_key_fifo();
@@ -365,6 +492,12 @@ void platform_present_hook(void) {
             fflush(NULL);
             exit(0);
         }
+#ifdef __APPLE__
+        platform_handle_mouse_capture_event(&e);
+        if (!__atomic_load_n(&g_mouse_captured, __ATOMIC_RELAXED) &&
+            (e.type == SDL_MOUSEMOTION || e.type == SDL_MOUSEWHEEL))
+            continue;
+#endif
         if (text_event(&e)) continue;
         if (e.type == SDL_KEYDOWN || e.type == SDL_KEYUP)
             key_event(e.key.keysym.scancode, e.type == SDL_KEYDOWN);
