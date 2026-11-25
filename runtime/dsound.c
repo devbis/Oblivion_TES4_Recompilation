@@ -443,8 +443,10 @@ SHIM(ds_CreateSoundBuffer) {
 }
 SHIM(ds_GetCaps) {
     uint32_t p = ARG(1);
-    uint32_t sz = M32(p);
-    memset(MEM + p + 4, 0, sz - 4);
+    /* The game can pass an uninitialized dwSize here. DSCAPS is 96 bytes in
+     * this 32-bit ABI; never trust the guest value as a memory write length. */
+    memset(MEM + p, 0, 96);
+    M32(p) = 96;
     M32(p + 4) = 0x00000F5F; /* continuous rate, 8/16 bit, mono/stereo, secondary */
     M32(p + 8) = 100;
     M32(p + 12) = 200000;
@@ -475,11 +477,11 @@ static const ShimFn k_ds_fns[] = {
 
 SHIM(DirectSoundCreate8) {
     static int init;
-#ifdef GAME_OBLIVION
-    /* Sound is switched off for now (the game then runs without audio).
-     * Remove this block to re-enable DirectSound. */
+#if defined(GAME_OBLIVION) && defined(__ANDROID__)
+    /* The Android port keeps DirectSound disabled; desktop SDL audio uses
+     * the software mixer below. */
     if (ARG(1)) M32(ARG(1)) = 0;
-    LOG("DirectSoundCreate: sound disabled (DSERR_NODRIVER)");
+    LOG("DirectSoundCreate: sound disabled on this platform (DSERR_NODRIVER)");
     RET(0x88780078u, 3);
 #endif
     if (!init) {
