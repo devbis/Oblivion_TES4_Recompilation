@@ -10,8 +10,86 @@
 static SDL_Window *g_window;
 static int g_frames;
 static void load_key_script(void);
+#ifdef __APPLE__
+typedef int (*PlatformMainCallFn)(void *);
+typedef struct { int (*call)(PlatformMainCallFn, void *); } PlatformMainDispatcher;
+typedef struct PlatformMainCall {
+    PlatformMainCallFn fn;
+    void *arg;
+    int result, done;
+    pthread_cond_t cond;
+    struct PlatformMainCall *next;
+} PlatformMainCall;
+static pthread_t g_sdl_main_thread;
+static pthread_mutex_t g_main_call_lock = PTHREAD_MUTEX_INITIALIZER;
+static PlatformMainCall *g_main_call_head, **g_main_call_tail = &g_main_call_head;
+
+int platform_call_main_thread(PlatformMainCallFn fn, void *arg) {
+    if (pthread_equal(pthread_self(), g_sdl_main_thread)) return fn(arg);
+    PlatformMainCall call = {.fn = fn, .arg = arg};
+    pthread_cond_init(&call.cond, NULL);
+    pthread_mutex_lock(&g_main_call_lock);
+    *g_main_call_tail = &call;
+    g_main_call_tail = &call.next;
+    while (!call.done) pthread_cond_wait(&call.cond, &g_main_call_lock);
+    int result = call.result;
+    pthread_mutex_unlock(&g_main_call_lock);
+    pthread_cond_destroy(&call.cond);
+    return result;
+}
+static PlatformMainDispatcher g_main_dispatcher = { platform_call_main_thread };
+
+static void platform_run_main_calls(void) {
+    for (;;) {
+        pthread_mutex_lock(&g_main_call_lock);
+        PlatformMainCall *call = g_main_call_head;
+        if (call) {
+            g_main_call_head = call->next;
+            if (!g_main_call_head) g_main_call_tail = &g_main_call_head;
+        }
+        pthread_mutex_unlock(&g_main_call_lock);
+        if (!call) return;
+        int result = call->fn(call->arg);
+        pthread_mutex_lock(&g_main_call_lock);
+        call->result = result;
+        call->done = 1;
+        pthread_cond_signal(&call->cond);
+        pthread_mutex_unlock(&g_main_call_lock);
+    }
+}
+
+static int platform_apply_cursor_mode(void *arg) {
+    int hidden = *(int *)arg;
+    SDL_ShowCursor(hidden ? SDL_DISABLE : SDL_ENABLE);
+    int rc = SDL_SetRelativeMouseMode(hidden ? SDL_TRUE : SDL_FALSE);
+    if (rc < 0) LOG("SDL_SetRelativeMouseMode: %s", SDL_GetError());
+    return rc == 0;
+}
+
+void platform_set_cursor_hidden(int hidden) {
+    static int current = -1;
+    hidden = !!hidden;
+    if (current == hidden) return;
+    current = hidden;
+    platform_call_main_thread(platform_apply_cursor_mode, &hidden);
+}
+
+static int platform_warp_mouse_main(void *arg) {
+    int *xy = arg;
+    SDL_WarpMouseInWindow(g_window, xy[0], xy[1]);
+    return 1;
+}
+
+void platform_warp_mouse(int x, int y) {
+    int xy[2] = {x, y};
+    platform_call_main_thread(platform_warp_mouse_main, xy);
+}
+#endif
 
 void platform_init(void) {
+#ifdef __APPLE__
+    g_sdl_main_thread = pthread_self();
+#endif
     SDL_SetHint(SDL_HINT_TOUCH_MOUSE_EVENTS, "0");
     if (SDL_Init(SDL_INIT_VIDEO | SDL_INIT_AUDIO | SDL_INIT_GAMECONTROLLER | SDL_INIT_EVENTS) != 0)
         rt_fatal("SDL_Init: %s", SDL_GetError());
@@ -25,6 +103,9 @@ void platform_init(void) {
 #endif
     g_window = SDL_CreateWindow(GAME_TITLE, SDL_WINDOWPOS_CENTERED, SDL_WINDOWPOS_CENTERED, w, h, flags);
     if (!g_window) rt_fatal("SDL_CreateWindow: %s", SDL_GetError());
+#ifdef __APPLE__
+    SDL_SetWindowData(g_window, "lb.main-thread-dispatcher", &g_main_dispatcher);
+#endif
     extern void user32_set_screen(int, int);
     user32_set_screen(w, h);
     LOG("platform: window %dx%d", w, h);
@@ -32,6 +113,27 @@ void platform_init(void) {
 }
 
 void *platform_window(void) { return g_window; }
+
+void platform_get_mouse(int *x, int *y) {
+    SDL_GetMouseState(x, y);
+}
+
+#ifndef __APPLE__
+void platform_set_cursor_hidden(int hidden) {
+    SDL_ShowCursor(hidden ? SDL_DISABLE : SDL_ENABLE);
+    SDL_SetRelativeMouseMode(hidden ? SDL_TRUE : SDL_FALSE);
+}
+void platform_warp_mouse(int x, int y) { SDL_WarpMouseInWindow(g_window, x, y); }
+#endif
+
+/* AppKit requires SDL_PumpEvents and Vulkan surface setup to run on the
+ * process main thread. The emulated game queues surface work from its worker. */
+void platform_pump_events(void) {
+#ifdef __APPLE__
+    SDL_PumpEvents();
+    platform_run_main_calls();
+#endif
+}
 
 /* Scripted input for automated runs: LB_KEYS="frame:Key[:frames],..." holds
  * the SDL-named key (e.g. Return, Space, Left) from that frame on. */
@@ -244,10 +346,20 @@ static void poll_key_fifo(void) {
 #endif
 }
 
+static int platform_get_event(SDL_Event *e) {
+#ifdef __APPLE__
+    /* SDL_PollEvent pumps AppKit events. The Cocoa main thread pumps them;
+     * this worker only removes already queued events. */
+    return SDL_PeepEvents(e, 1, SDL_GETEVENT, SDL_FIRSTEVENT, SDL_LASTEVENT);
+#else
+    return SDL_PollEvent(e);
+#endif
+}
+
 void platform_present_hook(void) {
     SDL_Event e;
     poll_key_fifo();
-    while (SDL_PollEvent(&e)) {
+    while (platform_get_event(&e) > 0) {
         if (e.type == SDL_QUIT) {
             LOG("quit requested");
             fflush(NULL);

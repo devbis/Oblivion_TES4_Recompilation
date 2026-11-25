@@ -69,11 +69,21 @@ static struct { const char *name; uint32_t ret; volatile uint32_t calls; uint32_
 static int g_wd_n;
 static __thread int t_wd = -1;
 
+static uint32_t host_thread_id(void) {
+#ifdef __APPLE__
+    uint64_t tid = 0;
+    pthread_threadid_np(NULL, &tid);
+    return (uint32_t)tid;
+#else
+    return (uint32_t)gettid();
+#endif
+}
+
 static void wd_note(CPU *c, const char *name) {
     if (t_wd < 0) {
         t_wd = __atomic_fetch_add(&g_wd_n, 1, __ATOMIC_RELAXED);
         if (t_wd >= WD_MAX) t_wd = WD_MAX - 1;
-        g_wd[t_wd].tid = (uint32_t)gettid();
+        g_wd[t_wd].tid = host_thread_id();
         g_wd[t_wd].th = pthread_self();
     }
     g_wd[t_wd].name = name;
@@ -106,7 +116,7 @@ static void wd_bt(int sig) {
     void *bt[48];
     int n = backtrace(bt, 48);
     char hdr[64];
-    int l = snprintf(hdr, sizeof hdr, "--- backtrace tid %d\n", (int)gettid());
+    int l = snprintf(hdr, sizeof hdr, "--- backtrace tid %u\n", host_thread_id());
     write(2, hdr, l);
     backtrace_symbols_fd(bt, n, 2);
 }

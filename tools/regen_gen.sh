@@ -9,7 +9,7 @@ set -e
 G=$(cd "${1:?usage: tools/regen_gen.sh GAME_DIR}" && pwd)
 ROOT=$(cd "$(dirname "$0")/.." && pwd)
 cd "$ROOT"
-find_file() { for f in "$G"/* "$G"/redist/* "$G"/Redist/*; do
+find_file() { for f in "$G"/* "$G"/redist/* "$G"/Redist/* "$G"/../dlls/syswow64/* "$G"/../dlls/system32/*; do
     [ "$(echo "${f##*/}" | tr A-Z a-z)" = "$1" ] && { echo "$f"; return; }; done
     echo "missing $1 in $G" >&2; exit 1; }
 SRC=$(find_file oblivion.exe); D3DX=$(find_file d3dx9_27.dll); BINK=$(find_file binkw32.dll)

@@ -40,10 +40,20 @@ SHIM(SystemParametersInfoA) { RET(1, 4); }
 SHIM(LoadIconA) { RET(0x20001, 2); }
 SHIM(LoadCursorA) { RET(0x20002, 2); }
 SHIM(SetCursor) { RET(0, 1); }
-SHIM(SetCursorPos) { RET(1, 2); }
+SHIM(SetCursorPos) {
+    extern void platform_warp_mouse(int, int);
+    platform_warp_mouse((int32_t)ARG(0), (int32_t)ARG(1));
+    RET(1, 2);
+}
 /* real display counter: games loop "while (ShowCursor(FALSE) >= 0)" */
 static volatile int g_cursor_count = 0;
-SHIM(ShowCursor) { int n = ARG(0) ? __atomic_add_fetch(&g_cursor_count, 1, __ATOMIC_SEQ_CST) : __atomic_sub_fetch(&g_cursor_count, 1, __ATOMIC_SEQ_CST); RET((uint32_t)n, 1); }
+SHIM(ShowCursor) {
+    int n = ARG(0) ? __atomic_add_fetch(&g_cursor_count, 1, __ATOMIC_SEQ_CST)
+                   : __atomic_sub_fetch(&g_cursor_count, 1, __ATOMIC_SEQ_CST);
+    extern void platform_set_cursor_hidden(int);
+    platform_set_cursor_hidden(n < 0);
+    RET((uint32_t)n, 1);
+}
 SHIM(LoadKeyboardLayoutA) { RET(0x04090409, 2); }
 /* US layout: virtual-key <-> PC set-1 scan code */
 static const uint8_t k_vk_sc[][2] = {
@@ -220,7 +230,14 @@ SHIM(CreateCompatibleBitmap) { RET(0x30003, 3); }
 SHIM(GetWindowThreadProcessId) { if (ARG(1)) M32(ARG(1)) = 0x42; RET(1, 2); }
 SHIM(ClientToScreen) { RET(1, 2); }
 SHIM(ScreenToClient) { RET(1, 2); }
-SHIM(GetCursorPos) { M32(ARG(0)) = 0; M32(ARG(0) + 4) = 0; RET(1, 1); }
+SHIM(GetCursorPos) {
+    int x = 0, y = 0;
+    extern void platform_get_mouse(int *, int *);
+    platform_get_mouse(&x, &y);
+    M32(ARG(0)) = (uint32_t)x;
+    M32(ARG(0) + 4) = (uint32_t)y;
+    RET(1, 1);
+}
 static void put_rect(uint32_t p) { M32(p) = 0; M32(p + 4) = 0; M32(p + 8) = (uint32_t)g_screen_w; M32(p + 12) = (uint32_t)g_screen_h; }
 SHIM(GetWindowRect) { put_rect(ARG(1)); RET(1, 2); }
 SHIM(GetClientRect) { put_rect(ARG(1)); RET(1, 2); }

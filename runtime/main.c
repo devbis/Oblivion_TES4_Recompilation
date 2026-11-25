@@ -49,6 +49,15 @@ void rt_fatal(const char *fmt, ...) {
 static uint16_t rd16(const uint8_t *p) { return (uint16_t)(p[0] | p[1] << 8); }
 static uint32_t rd32(const uint8_t *p) { return p[0] | p[1] << 8 | p[2] << 16 | (uint32_t)p[3] << 24; }
 
+static const uint8_t *find_bytes(const uint8_t *haystack, size_t haystack_len,
+                                const uint8_t *needle, size_t needle_len) {
+    if (!needle_len || haystack_len < needle_len) return NULL;
+    const uint8_t *end = haystack + haystack_len - needle_len + 1;
+    for (const uint8_t *p = haystack; p < end; p++)
+        if (p[0] == needle[0] && !memcmp(p, needle, needle_len)) return p;
+    return NULL;
+}
+
 #ifdef GAME_OBLIVION
 /* The MSVC CRT startup begins  push imm8 / push imm32 / call __SEH_prolog /
  * and [ebp-4],0 / lea eax,[ebp-X] / push eax / call [GetStartupInfoA].
@@ -70,7 +79,7 @@ static uint32_t find_crt_entry(uint32_t base, const uint8_t *opt, const uint8_t 
         const uint8_t *lo = MEM + base + rd32(sec + 12);
         size_t len = rd32(sec + 8);
         uint8_t pat[7] = {0x50, 0xFF, 0x15, (uint8_t)iat_va, (uint8_t)(iat_va >> 8), (uint8_t)(iat_va >> 16), (uint8_t)(iat_va >> 24)};
-        for (const uint8_t *p = lo; (p = memmem(p, (size_t)(lo + len - p), pat, sizeof pat)); p++) {
+        for (const uint8_t *p = lo; (p = find_bytes(p, (size_t)(lo + len - p), pat, sizeof pat)); p++) {
             const uint8_t *a = p - 7, *q = a - 12;
             if (q < lo) continue;
             if (a[0] == 0x83 && a[1] == 0x65 && a[2] == 0xFC && a[3] == 0 && a[4] == 0x8D && a[5] == 0x45 &&
@@ -100,8 +109,10 @@ static uint32_t load_pe(const char *path, uint32_t want_base, const char *modnam
     if (!strcmp(modname, GAME_EXE) && (f = fopen("Oblivion_unpacked.exe", "rb"))) LOG("using Oblivion_unpacked.exe");
 #endif
     if (!f) f = fopen(path, "rb");
-    if (!f) {  /* DirectX DLLs may sit in redist/, any case */
-        static const char *const k_dirs[] = {"redist/", "Redist/", "REDIST/", NULL};
+    if (!f) {  /* DirectX DLLs may sit beside a GOG Linux install's data/ folder. */
+        static const char *const k_dirs[] = {
+            "redist/", "Redist/", "REDIST/", "../dlls/syswow64/", "../dlls/system32/", NULL
+        };
         char alt[512];
         for (int i = 0; !f && k_dirs[i]; i++) {
             snprintf(alt, sizeof alt, "%s%s", k_dirs[i], path);
@@ -356,7 +367,9 @@ void rt_altstack(void) {}
 
 /* Fails with a message naming exactly what is missing from the game folder. */
 static int file_present(const char *name) {
-    static const char *const k_dirs[] = {"", "redist/", "Redist/", "REDIST/", NULL};
+    static const char *const k_dirs[] = {
+        "", "redist/", "Redist/", "REDIST/", "../dlls/syswow64/", "../dlls/system32/", NULL
+    };
     char lower[256];
     snprintf(lower, sizeof lower, "%s", name);
     for (char *q = lower; *q; q++) *q = (char)tolower((unsigned char)*q);
@@ -469,6 +482,23 @@ static void check_game_dir(void) {
         rt_fatal("missing from %s: %s (the DLLs may also sit in a redist subfolder)", g_game_dir, missing);
 }
 
+#ifdef __APPLE__
+extern void rt_thread_bind(CPU *c);
+typedef struct { CPU *cpu; volatile int done; } GuestEntry;
+
+static void *guest_entry_thread(void *arg) {
+    GuestEntry *entry = arg;
+    CPU *c = entry->cpu;
+    rt_thread_bind(c);
+    c->r[4] -= 4;
+    M32(c->r[4]) = 0;
+    rt_call(c, g_entry);
+    LOG("entry returned eax=%u", c->r[0]);
+    __atomic_store_n(&entry->done, 1, __ATOMIC_RELEASE);
+    return NULL;
+}
+#endif
+
 int main(int argc, char **argv) {
     install_crash_handler();
     const char *env = getenv("LB_LOG");
@@ -505,7 +535,16 @@ int main(int argc, char **argv) {
 #endif
     if (argc > 1) snprintf(g_game_dir, sizeof g_game_dir, "%s", argv[1]);
     if (argc > 2) snprintf(g_save_dir, sizeof g_save_dir, "%s", argv[2]);
-    MEM = mmap(NULL, 1ull << 32, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS | MAP_NORESERVE, -1, 0);
+    int map_flags = MAP_PRIVATE;
+#ifdef MAP_ANONYMOUS
+    map_flags |= MAP_ANONYMOUS;
+#else
+    map_flags |= MAP_ANON;
+#endif
+#ifdef MAP_NORESERVE
+    map_flags |= MAP_NORESERVE;
+#endif
+    MEM = mmap(NULL, 1ull << 32, PROT_READ | PROT_WRITE, map_flags, -1, 0);
     if (MEM == MAP_FAILED) rt_fatal("cannot reserve guest address space");
     /* keep the null page inaccessible to catch null derefs */
     mprotect(MEM, 0x10000, PROT_NONE);
@@ -558,10 +597,27 @@ int main(int argc, char **argv) {
         if (dll_entries[i] && !rt_invoke(c, dll_entries[i], 3, args))
             rt_fatal("DllMain of %s failed", g_dll_modules[i]);
     }
+    /* Keep AppKit's event pump and Cocoa surface creation on the process main
+     * thread. The guest entry runs on a worker while the host pumps events. */
+#ifdef __APPLE__
+    GuestEntry entry = {c, 0};
+    pthread_t guest;
+    int thread_error = pthread_create(&guest, NULL, guest_entry_thread, &entry);
+    if (thread_error)
+        rt_fatal("cannot start guest entry thread: %s", strerror(thread_error));
+    extern void platform_pump_events(void);
+    while (!__atomic_load_n(&entry.done, __ATOMIC_ACQUIRE)) {
+        platform_pump_events();
+        usleep(10000);
+    }
+    pthread_join(guest, NULL);
+    return (int)c->r[0];
+#else
     /* push a return address that ends the process when main returns */
     c->r[4] -= 4;
     M32(c->r[4]) = 0;
     rt_call(c, g_entry);
     LOG("entry returned eax=%u", c->r[0]);
     return (int)c->r[0];
+#endif
 }

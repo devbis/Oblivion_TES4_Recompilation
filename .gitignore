@@ -16,6 +16,7 @@
 save/
 /port/
 log.txt
+lb_d3d9.log
 # Your own exe and DLLs, if kept next to the repo
 GAME/
 # Build outputs (APKs go on GitHub Releases as assets, not in git)

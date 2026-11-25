@@ -3,6 +3,15 @@
  * player's log.txt shows where the time goes. save/noprof.txt turns it off. */
 #define _GNU_SOURCE
 #include "rt.h"
+
+#ifdef __APPLE__
+/* Darwin's deprecated ucontext API does not expose the Linux register layout
+ * used by the sampling profiler. Keep runtime reporting hooks available. */
+void prof_start(void) { }
+void prof_report(void) { }
+void cpu_report(void) { }
+#else
+
 #include <dlfcn.h>
 #include <signal.h>
 #include <stdio.h>
@@ -166,3 +175,4 @@ void cpu_report(void) {
     if (last_t != 0) LOG("cpu: %.0f%% of one core in total;%s", total, out);
     last_t = now;
 }
+#endif

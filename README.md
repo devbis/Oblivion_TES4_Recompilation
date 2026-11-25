@@ -47,6 +47,20 @@ Hotkeys require the [NorthernUI Hotkeys](https://www.nexusmods.com/oblivion/mods
 4. `cd android && ./gradlew assembleDebug -PndkVersion=29.0.14206865` (JDK 17, SDK 34, CMake 3.22.1, NDK r27+).
 5. Copy the whole Oblivion folder (with `Data/`, the two DLLs) to the phone and choose it in the app.
 
+## macOS (Apple Silicon)
+
+The desktop target recompiles the 32-bit Windows executable into native arm64 code and runs it with the SDL2/DXVK runtime. Vulkan on macOS needs MoltenVK; install the Vulkan SDK or the Homebrew Vulkan loader and MoltenVK, and have CMake and Ninja available.
+
+The GOG Linux layout is supported directly: pass `game_info/data` as the game folder. The D3DX DLL is found in the adjacent `game_info/dlls/syswow64` directory.
+
+```sh
+python3 -m pip install capstone==5.0.9 pefile==2024.8.26
+./desktop/build.sh "/path/to/TESIVOblivion_ENG/game_info/data"
+./desktop/run.sh "/path/to/TESIVOblivion_ENG/game_info/data"
+```
+
+The first command generates `gen/` from the game executable and its DLLs; the build script then produces `desktop/build/lb` for arm64. The game data stays in its original directory.
+
 ## Known gaps
 - **Expect crashes.** `port/log.txt` lists imports with no shim and any `rt_unimpl` trap.
 - 271 of 48,462 discovered functions were rejected by the lifter (data mis-decoded as code, segment-register/BCD instructions); check `rejected` output of `lift.py`.

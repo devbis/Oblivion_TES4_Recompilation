@@ -27,13 +27,26 @@ namespace dxvk {
     for (const char* name : extensionNames)
       names.add(name);
 
+#if defined(__APPLE__)
+    // MoltenVK advertises as a Vulkan portability implementation. Vulkan
+    // loaders hide such devices unless this extension is enabled at instance
+    // creation time.
+    names.add(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+#endif
+
     return names;
   }
 
 
   DxvkNameSet DxvkPlatformExts::getDeviceExtensions(
           uint32_t      adapterId) {
-    return DxvkNameSet();
+    DxvkNameSet names;
+#if defined(__APPLE__)
+    // Vulkan requires portability implementations to expose and enable this
+    // device extension.
+    names.add(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME);
+#endif
+    return names;
   }
   
 

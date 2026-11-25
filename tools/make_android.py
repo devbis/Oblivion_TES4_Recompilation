@@ -37,6 +37,18 @@ def copytree(src, dst, ignore=None):
     shutil.copytree(src, dst, ignore=ignore)
 
 
+def replace_once(rel, old, new):
+    path = os.path.join(OUT, rel)
+    with open(path, encoding="utf-8") as f:
+        text = f.read()
+    if new in text:
+        return
+    if old not in text:
+        raise RuntimeError("cannot apply macOS DXVK patch to " + rel)
+    with open(path, "w", encoding="utf-8", newline="\n") as f:
+        f.write(text.replace(old, new, 1))
+
+
 # ---- Gradle skeleton from SDL's android-project
 ap = os.path.join(SDL, "android-project")
 for rel in ["gradlew", "gradlew.bat", "gradle/wrapper/gradle-wrapper.jar",
@@ -150,6 +162,108 @@ copytree(os.path.join(SDL, "include"), "app/jni/sdlinc/SDL2")
 copytree(os.path.join(DXVK, "src"), "app/jni/dxvk/src",
          ignore=shutil.ignore_patterns("*.build"))
 copytree(os.path.join(DXVK, "include"), "app/jni/dxvk/include")
+replace_once("app/jni/dxvk/src/vulkan/vulkan_loader.h",
+"""#ifdef DXVK_NATIVE
+#include <vulkan/vulkan_native.h>
+#endif
+""",
+"""#ifdef DXVK_NATIVE
+#include <vulkan/vulkan_native.h>
+#endif
+
+/* Compatibility definitions for MoltenVK's portability extensions. */
+#ifndef VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME
+#define VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME \"VK_KHR_portability_enumeration\"
+#endif
+#ifndef VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR
+#define VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR 0x00000001
+#endif
+#ifndef VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME
+#define VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME \"VK_KHR_portability_subset\"
+#endif
+""")
+replace_once("app/jni/dxvk/src/dxvk/platform/dxvk_sdl2_exts.cpp",
+"""    for (const char* name : extensionNames)
+      names.add(name);
+
+    return names;
+""",
+"""    for (const char* name : extensionNames)
+      names.add(name);
+
+#if defined(__APPLE__)
+    names.add(VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME);
+#endif
+
+    return names;
+""")
+replace_once("app/jni/dxvk/src/dxvk/platform/dxvk_sdl2_exts.cpp",
+"""  DxvkNameSet DxvkPlatformExts::getDeviceExtensions(
+          uint32_t      adapterId) {
+    return DxvkNameSet();
+  }
+""",
+"""  DxvkNameSet DxvkPlatformExts::getDeviceExtensions(
+          uint32_t      adapterId) {
+    DxvkNameSet names;
+#if defined(__APPLE__)
+    names.add(VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME);
+#endif
+    return names;
+  }
+""")
+replace_once("app/jni/dxvk/src/dxvk/dxvk_instance.cpp",
+"""    info.flags                    = 0;
+""",
+"""#if defined(__APPLE__)
+    info.flags                    = VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+#else
+    info.flags                    = 0;
+#endif
+""")
+replace_once("app/jni/dxvk/src/wsi/sdl2/wsi_presenter_sdl2.cpp",
+"""#ifdef __ANDROID__
+// VK_KHR_android_surface by hand: the NDK's vulkan_android.h is newer than
+""",
+"""#ifdef __APPLE__
+namespace {
+  typedef int (*PlatformMainCallFn)(int (*)(void*), void*);
+  struct PlatformMainDispatcher { PlatformMainCallFn call; };
+
+  struct SdlSurfaceArgs {
+    SDL_Window* window;
+    VkInstance instance;
+    VkSurfaceKHR* surface;
+  };
+
+  int createSdlSurfaceOnMainThread(void* opaque) {
+    auto* args = static_cast<SdlSurfaceArgs*>(opaque);
+    return SDL_Vulkan_CreateSurface(args->window, args->instance, args->surface) ? 1 : 0;
+  }
+}
+#endif
+
+#ifdef __ANDROID__
+// VK_KHR_android_surface by hand: the NDK's vulkan_android.h is newer than
+""")
+replace_once("app/jni/dxvk/src/wsi/sdl2/wsi_presenter_sdl2.cpp",
+"""    return SDL_Vulkan_CreateSurface(window, vki->instance(), pSurface)
+         ? VK_SUCCESS
+         : VK_ERROR_OUT_OF_HOST_MEMORY;
+""",
+"""#ifdef __APPLE__
+    SdlSurfaceArgs args = { window, vki->instance(), pSurface };
+    auto* dispatcher = static_cast<PlatformMainDispatcher*>(
+      SDL_GetWindowData(window, "lb.main-thread-dispatcher"));
+    return dispatcher && dispatcher->call(createSdlSurfaceOnMainThread, &args)
+         ? VK_SUCCESS
+         : VK_ERROR_OUT_OF_HOST_MEMORY;
+#else
+    return SDL_Vulkan_CreateSurface(window, vki->instance(), pSurface)
+         ? VK_SUCCESS
+         : VK_ERROR_OUT_OF_HOST_MEMORY;
+#endif
+""")
 gen = os.path.join(OUT, "app/jni/dxvk/generated")
 os.makedirs(gen, exist_ok=True)
 for root, _, files in os.walk(DXVK_BUILD):
@@ -164,19 +278,40 @@ for e in json.load(open(os.path.join(DXVK_BUILD, "compile_commands.json"))):
     f = os.path.normpath(os.path.join(e["directory"], e["file"]))
     rel = os.path.relpath(f, os.path.join(DXVK, "src"))
     srcs.append("src/" + rel.replace(os.sep, "/"))
+srcs = [s for s in srcs if not s.endswith("src/util/platform/util_env_linux.cpp")]
 write("app/jni/dxvk/CMakeLists.txt", """# dxvk-native D3D9 (native-1.9.2b, patched for mobile GPUs). Source list and
 # generated shader headers come from a desktop meson build (tools/make_android.py).
 add_library(dxvk_d3d9 SHARED
     %s)
+if(APPLE AND NOT ANDROID)
+  target_sources(dxvk_d3d9 PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../../../desktop/util_env_macos.cpp)
+else()
+  target_sources(dxvk_d3d9 PRIVATE src/util/platform/util_env_linux.cpp)
+endif()
 target_include_directories(dxvk_d3d9 PRIVATE
     generated include include/native include/native/windows include/native/directx
     src/util src/dxvk src/d3d9 src/dxso src/wsi src/spirv src/vulkan ../sdlinc)
 target_include_directories(dxvk_d3d9 PUBLIC include/native/directx include/native/windows include/native)
 target_compile_definitions(dxvk_d3d9 PRIVATE NOMINMAX _WIN32_WINNT=0xa00 DXVK_NATIVE
-    DXVK_WSI_SDL2 DXVK_PLATFORM_LINUX _FILE_OFFSET_BITS=64)
+    DXVK_WSI_SDL2 _FILE_OFFSET_BITS=64)
+if(APPLE AND NOT ANDROID)
+  target_compile_definitions(dxvk_d3d9 PRIVATE DXVK_PLATFORM_MACOS)
+else()
+  target_compile_definitions(dxvk_d3d9 PRIVATE DXVK_PLATFORM_LINUX)
+endif()
 target_compile_options(dxvk_d3d9 PRIVATE -O2 "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include cstdint>" "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include cstring>"
     -Wno-deprecated-declarations -Wno-everything -fvisibility=default)
-target_link_libraries(dxvk_d3d9 PRIVATE SDL2 vulkan $<$<BOOL:${ANDROID}>:log>)
+if(TARGET SDL2-static)
+  set(DXVK_SDL_TARGET SDL2-static)
+else()
+  set(DXVK_SDL_TARGET SDL2)
+endif()
+if(APPLE AND NOT ANDROID)
+  find_package(Vulkan REQUIRED)
+  target_link_libraries(dxvk_d3d9 PRIVATE ${DXVK_SDL_TARGET} Vulkan::Vulkan)
+else()
+  target_link_libraries(dxvk_d3d9 PRIVATE ${DXVK_SDL_TARGET} vulkan $<$<BOOL:${ANDROID}>:log>)
+endif()
 """ % "\n    ".join(sorted(srcs)))
 
 write("app/jni/CMakeLists.txt", """cmake_minimum_required(VERSION 3.18)

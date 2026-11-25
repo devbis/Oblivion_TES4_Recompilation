@@ -11,6 +11,19 @@
 #include <vulkan/vulkan_native.h>
 #endif
 
+/* These extension declarations postdate the Vulkan headers bundled with this
+ * DXVK-native snapshot. macOS uses them to enumerate MoltenVK's portability
+ * implementation and to enable the required device extension. */
+#ifndef VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME
+#define VK_KHR_PORTABILITY_ENUMERATION_EXTENSION_NAME "VK_KHR_portability_enumeration"
+#endif
+#ifndef VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR
+#define VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR 0x00000001
+#endif
+#ifndef VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME
+#define VK_KHR_PORTABILITY_SUBSET_EXTENSION_NAME "VK_KHR_portability_subset"
+#endif
+
 #define VULKAN_FN(name) \
   ::PFN_ ## name name = reinterpret_cast<::PFN_ ## name>(sym(#name))
 

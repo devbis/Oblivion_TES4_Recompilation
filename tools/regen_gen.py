@@ -10,7 +10,15 @@ TOOLS = os.path.join(ROOT, "tools")
 
 
 def find(game, name):
-    for d in (game, os.path.join(game, "redist"), os.path.join(game, "Redist")):
+    game_info = os.path.dirname(game)
+    dirs = (
+        game,
+        os.path.join(game, "redist"),
+        os.path.join(game, "Redist"),
+        os.path.join(game_info, "dlls", "syswow64"),
+        os.path.join(game_info, "dlls", "system32"),
+    )
+    for d in dirs:
         if os.path.isdir(d):
             for f in os.listdir(d):
                 if f.lower() == name:

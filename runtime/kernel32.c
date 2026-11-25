@@ -15,6 +15,14 @@
 #include <time.h>
 #include <unistd.h>
 
+#ifdef __APPLE__
+#define STAT_MTIME_SEC(st)  ((st).st_mtimespec.tv_sec)
+#define STAT_MTIME_NSEC(st) ((st).st_mtimespec.tv_nsec)
+#else
+#define STAT_MTIME_SEC(st)  ((st).st_mtim.tv_sec)
+#define STAT_MTIME_NSEC(st) ((st).st_mtim.tv_nsec)
+#endif
+
 #define ERROR_FILE_NOT_FOUND 2
 #define ERROR_PATH_NOT_FOUND 3
 #define ERROR_ACCESS_DENIED 5
@@ -228,9 +236,11 @@ static __thread uint32_t t_preset_tid;  /* id CreateThread already handed out */
  * little core is a stutter. dxvk, driver and audio threads inherit this.
  * save/allcores.txt lets them use every core; save/singlecore.txt pins every
  * guest thread to the fastest core instead, as 0.8-0.16 did. */
+#ifdef __ANDROID__
 static int g_guest_cpu = -2;     /* singlecore: the core; -1 otherwise */
 static int g_fast_set;           /* 1: guest threads restricted to g_fast */
 static cpu_set_t g_fast;
+#endif
 
 static void pin_guest_thread(void) {
 #ifdef __ANDROID__
@@ -342,6 +352,10 @@ void rt_thread_init(CPU *c) {
     c->thread = (void *)(intptr_t)slot;
     t_cpu = c;
 }
+
+/* Rebind the initial guest thread when macOS moves it onto a worker so the
+ * Cocoa event pump can stay on the process's original main thread. */
+void rt_thread_bind(CPU *c) { t_cpu = c; }
 
 static void thread_exit_slot(CPU *c) {
     LOG("thread slot %d released", (int)(intptr_t)c->thread);
@@ -683,7 +697,7 @@ static int dir_lookup_ci(const char *dir, char *comp, size_t compsz) {
     DirCache *dc = NULL;
     for (int i = 0; i < 16; i++)
         if (g_dircache[i].names && !strcmp(g_dircache[i].dir, dir) &&
-            g_dircache[i].mtime == st.st_mtim.tv_sec && g_dircache[i].mtime_ns == st.st_mtim.tv_nsec)
+            g_dircache[i].mtime == STAT_MTIME_SEC(st) && g_dircache[i].mtime_ns == STAT_MTIME_NSEC(st))
             dc = &g_dircache[i];
     if (!dc) {
         DIR *d = opendir(dir);
@@ -702,7 +716,7 @@ static int dir_lookup_ci(const char *dir, char *comp, size_t compsz) {
         closedir(d);
         if (!dc->names) dc->names = calloc(1, 1);
         snprintf(dc->dir, sizeof dc->dir, "%s", dir);
-        dc->mtime = st.st_mtim.tv_sec; dc->mtime_ns = st.st_mtim.tv_nsec;
+        dc->mtime = STAT_MTIME_SEC(st); dc->mtime_ns = STAT_MTIME_NSEC(st);
     }
     int hit = 0;
     for (size_t o = 0; o < dc->len; o += strlen(dc->names + o) + 1)

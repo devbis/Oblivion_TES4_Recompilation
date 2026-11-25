@@ -138,7 +138,11 @@ namespace dxvk {
     VkInstanceCreateInfo info;
     info.sType                    = VK_STRUCTURE_TYPE_INSTANCE_CREATE_INFO;
     info.pNext                    = nullptr;
+#if defined(__APPLE__)
+    info.flags                    = VK_INSTANCE_CREATE_ENUMERATE_PORTABILITY_BIT_KHR;
+#else
     info.flags                    = 0;
+#endif
     info.pApplicationInfo         = &appInfo;
     info.enabledLayerCount        = 0;
     info.ppEnabledLayerNames      = nullptr;

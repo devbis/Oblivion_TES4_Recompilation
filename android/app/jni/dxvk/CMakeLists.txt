@@ -103,7 +103,6 @@ add_library(dxvk_d3d9 SHARED
     src/util/log/log.cpp
     src/util/log/log_debug.cpp
     src/util/platform/thread_native.cpp
-    src/util/platform/util_env_linux.cpp
     src/util/platform/util_luid_linux.cpp
     src/util/platform/util_string_linux.cpp
     src/util/sha1/sha1.c
@@ -121,12 +120,38 @@ add_library(dxvk_d3d9 SHARED
     src/wsi/sdl2/wsi_presenter_sdl2.cpp
     src/wsi/sdl2/wsi_window_sdl2.cpp
     src/wsi/sdl2/wsi_native_surface.cpp)
+
+# The Linux implementation reads /proc/self/exe. macOS has its own executable
+# path API, while the other native helpers are POSIX-compatible.
+if(APPLE AND NOT ANDROID)
+  target_sources(dxvk_d3d9 PRIVATE ${CMAKE_CURRENT_LIST_DIR}/../../../../desktop/util_env_macos.cpp)
+else()
+  target_sources(dxvk_d3d9 PRIVATE src/util/platform/util_env_linux.cpp)
+endif()
+
 target_include_directories(dxvk_d3d9 PRIVATE
     generated include include/native include/native/windows include/native/directx
     src/util src/dxvk src/d3d9 src/dxso src/wsi src/spirv src/vulkan ../sdlinc)
 target_include_directories(dxvk_d3d9 PUBLIC include/native/directx include/native/windows include/native)
 target_compile_definitions(dxvk_d3d9 PRIVATE NOMINMAX _WIN32_WINNT=0xa00 DXVK_NATIVE
-    DXVK_WSI_SDL2 DXVK_PLATFORM_LINUX _FILE_OFFSET_BITS=64)
+    DXVK_WSI_SDL2 _FILE_OFFSET_BITS=64)
+if(APPLE AND NOT ANDROID)
+  target_compile_definitions(dxvk_d3d9 PRIVATE DXVK_PLATFORM_MACOS)
+else()
+  target_compile_definitions(dxvk_d3d9 PRIVATE DXVK_PLATFORM_LINUX)
+endif()
 target_compile_options(dxvk_d3d9 PRIVATE -O2 "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include cstdint>" "$<$<COMPILE_LANGUAGE:CXX>:SHELL:-include cstring>"
     -Wno-deprecated-declarations -Wno-everything -fvisibility=default)
-target_link_libraries(dxvk_d3d9 PRIVATE SDL2 vulkan $<$<BOOL:${ANDROID}>:log>)
+if(TARGET SDL2-static)
+  set(DXVK_SDL_TARGET SDL2-static)
+elseif(TARGET SDL2)
+  set(DXVK_SDL_TARGET SDL2)
+else()
+  set(DXVK_SDL_TARGET SDL2)
+endif()
+if(APPLE AND NOT ANDROID)
+  find_package(Vulkan REQUIRED)
+  target_link_libraries(dxvk_d3d9 PRIVATE ${DXVK_SDL_TARGET} Vulkan::Vulkan)
+else()
+  target_link_libraries(dxvk_d3d9 PRIVATE ${DXVK_SDL_TARGET} vulkan $<$<BOOL:${ANDROID}>:log>)
+endif()
