@@ -37,6 +37,7 @@ namespace dxvk {
     invariantPosition    = options.invariantPosition;
 
     forceSamplerTypeSpecConstants = options.forceSamplerTypeSpecConstants;
+    deAliasedSamplers = options.deAliasedSamplers;
 
     vertexConstantBufferAsSSBO = pDevice->GetVertexConstantLayout().totalSize() > devInfo.core.properties.limits.maxUniformBufferRange;
 

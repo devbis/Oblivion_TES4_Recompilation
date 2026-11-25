@@ -125,6 +125,10 @@ namespace dxvk {
     /// Works around a game bug in Halo CE where it gives cube textures to 2d/volume samplers
     bool forceSamplerTypeSpecConstants;
 
+    /// Use distinct image bindings for D3D9 sampler texture-type variants.
+    /// Required by MoltenVK's Metal shader translation.
+    bool deAliasedSamplers = false;
+
     /// Forces an MSAA level on the swapchain
     int32_t forceSwapchainMSAA;
 

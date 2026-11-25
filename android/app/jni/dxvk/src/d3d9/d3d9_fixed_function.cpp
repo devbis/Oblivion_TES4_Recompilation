@@ -15,6 +15,7 @@ namespace dxvk {
 
   D3D9FixedFunctionOptions::D3D9FixedFunctionOptions(const D3D9Options* options) {
     invariantPosition = options->invariantPosition;
+    deAliasedSamplers = options->deAliasedSamplers;
   }
 
   uint32_t DoFixedFunctionFog(SpirvModule& spvModule, const D3D9FogContext& fogCtx) {
@@ -2091,8 +2092,13 @@ namespace dxvk {
       std::string name = str::format("s", i);
       m_module.setDebugName(sampler.varId, name.c_str());
 
+      uint32_t variant = 0;
+      if (m_options.deAliasedSamplers) {
+        variant = type == D3DRTYPE_VOLUMETEXTURE ? 1u
+          : type == D3DRTYPE_CUBETEXTURE ? 2u : 0u;
+      }
       const uint32_t bindingId = computeResourceSlotId(DxsoProgramType::PixelShader,
-        DxsoBindingType::Image, i);
+        DxsoBindingType::Image, i) + variant;
 
       sampler.bound = m_module.specConstBool(true);
       m_module.decorateSpecId(sampler.bound, bindingId);

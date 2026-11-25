@@ -5770,14 +5770,18 @@ namespace dxvk {
     const uint32_t slot = computeResourceSlotId(
       samplerInfo.first, DxsoBindingType::Image,
       samplerInfo.second);
+    const uint32_t variantCount = m_d3d9Options.deAliasedSamplers
+      ? SamplerVariantCount : 1u;
 
     EmitCs([this,
       cSlot = slot,
+      cVariantCount = variantCount,
       cKey  = key
     ] (DxvkContext* ctx) {
       auto pair = m_samplers.find(cKey);
       if (pair != m_samplers.end()) {
-        ctx->bindResourceSampler(cSlot, pair->second);
+        for (uint32_t v = 0; v < cVariantCount; v++)
+          ctx->bindResourceSampler(cSlot + v, pair->second);
         return;
       }
 
@@ -5817,7 +5821,8 @@ namespace dxvk {
         auto sampler = m_dxvkDevice->createSampler(info);
 
         m_samplers.insert(std::make_pair(cKey, sampler));
-        ctx->bindResourceSampler(cSlot, std::move(sampler));
+        for (uint32_t v = 0; v < cVariantCount; v++)
+          ctx->bindResourceSampler(cSlot + v, sampler);
 
         m_samplerCount++;
       }
@@ -5840,18 +5845,35 @@ namespace dxvk {
     D3D9CommonTexture* commonTex =
       GetCommonTexture(m_state.textures[StateSampler]);
 
+    uint32_t variant = 0;
+    uint32_t variantCount = 1;
+    if (m_d3d9Options.deAliasedSamplers) {
+      const D3DRESOURCETYPE type = commonTex->GetType();
+      variant = type == D3DRTYPE_VOLUMETEXTURE ? 1u
+        : type == D3DRTYPE_CUBETEXTURE ? 2u : 0u;
+      variant = samplerTypeVariant(variant, commonTex->IsShadow());
+      variantCount = SamplerVariantCount;
+    }
+
     EmitCs([
       cSlot = slot,
+      cVariant = variant,
+      cVariantCount = variantCount,
       cImageView = commonTex->GetSampleView(srgb)
     ](DxvkContext* ctx) {
-      ctx->bindResourceView(cSlot, cImageView, nullptr);
+      for (uint32_t v = 0; v < cVariantCount; v++)
+        ctx->bindResourceView(cSlot + v,
+          v == cVariant ? cImageView : nullptr, nullptr);
     });
   }
 
 
   void D3D9DeviceEx::UnbindTextures(uint32_t mask) {
+    const uint32_t variantCount = m_d3d9Options.deAliasedSamplers
+      ? SamplerVariantCount : 1u;
     EmitCs([
-      cMask = mask
+      cMask = mask,
+      cVariantCount = variantCount
     ](DxvkContext* ctx) {
       for (uint32_t i : bit::BitMask(cMask)) {
         auto shaderSampler = RemapStateSamplerShader(i);
@@ -5859,7 +5881,8 @@ namespace dxvk {
         uint32_t slot = computeResourceSlotId(shaderSampler.first,
           DxsoBindingType::Image, uint32_t(shaderSampler.second));
 
-        ctx->bindResourceView(slot, nullptr, nullptr);
+        for (uint32_t v = 0; v < cVariantCount; v++)
+          ctx->bindResourceView(slot + v, nullptr, nullptr);
       }
     });
   }
@@ -7100,13 +7123,17 @@ namespace dxvk {
     for (uint32_t i = 0; i < m_state.textures.size(); i++)
       TextureChangePrivate(m_state.textures[i], nullptr);
 
+    const uint32_t variantCount = m_d3d9Options.deAliasedSamplers
+      ? SamplerVariantCount : 1u;
     EmitCs([
-      cSize = m_state.textures.size()
+      cSize = m_state.textures.size(),
+      cVariantCount = variantCount
     ](DxvkContext* ctx) {
       for (uint32_t i = 0; i < cSize; i++) {
         auto samplerInfo = RemapStateSamplerShader(DWORD(i));
         uint32_t slot = computeResourceSlotId(samplerInfo.first, DxsoBindingType::Image, uint32_t(samplerInfo.second));
-        ctx->bindResourceView(slot, nullptr, nullptr);
+        for (uint32_t v = 0; v < cVariantCount; v++)
+          ctx->bindResourceView(slot + v, nullptr, nullptr);
       }
     });
 

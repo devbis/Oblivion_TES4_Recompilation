@@ -752,11 +752,28 @@ namespace dxvk {
 
       m_module.decorateDescriptorSet(sampler.varId, 0);
       m_module.decorateBinding      (sampler.varId, bindingId);
+
+      if (m_moduleInfo.options.deAliasedSamplers) {
+        uint32_t vBound = m_module.specConstBool(true);
+        m_module.decorateSpecId(vBound, bindingId);
+        m_module.setDebugName(vBound,
+          str::format("s", idx, suffix, depth ? "_shadow" : "", "_bound").c_str());
+        m_variantBoundConsts.push_back(vBound);
+
+        DxvkResourceSlot variantResource;
+        variantResource.slot = bindingId;
+        variantResource.type = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+        variantResource.view = viewType;
+        variantResource.access = VK_ACCESS_SHADER_READ_BIT;
+        m_resourceSlots.push_back(variantResource);
+      }
     };
 
     const uint32_t binding = computeResourceSlotId(m_programInfo.type(),
       DxsoBindingType::Image,
       idx);
+    const uint32_t deAliased = m_moduleInfo.options.deAliasedSamplers ? 1u : 0u;
+    m_variantBoundConsts.clear();
 
     const bool implicit = m_programInfo.majorVersion() < 2 || m_moduleInfo.options.forceSamplerTypeSpecConstants;
 
@@ -764,11 +781,11 @@ namespace dxvk {
       DxsoSamplerType samplerType = 
         SamplerTypeFromTextureType(type);
 
-      DclSampler(idx, binding, samplerType, false, implicit);
+      DclSampler(idx, binding + deAliased * samplerTypeVariant(uint32_t(samplerType), false), samplerType, false, implicit);
 
       if (samplerType != SamplerTypeTexture3D) {
         // We could also be depth compared!
-        DclSampler(idx, binding, samplerType, true, implicit);
+        DclSampler(idx, binding + deAliased * samplerTypeVariant(uint32_t(samplerType), true), samplerType, true, implicit);
       }
     }
     else {
@@ -777,27 +794,37 @@ namespace dxvk {
       for (uint32_t i = 0; i < SamplerTypeCount; i++) {
         auto samplerType = static_cast<DxsoSamplerType>(i);
 
-        DclSampler(idx, binding, samplerType, false, implicit);
+        DclSampler(idx, binding + deAliased * samplerTypeVariant(uint32_t(samplerType), false), samplerType, false, implicit);
 
         if (samplerType != SamplerTypeTexture3D)
-          DclSampler(idx, binding, samplerType, true, implicit);
+          DclSampler(idx, binding + deAliased * samplerTypeVariant(uint32_t(samplerType), true), samplerType, true, implicit);
       }
     }
 
     DxsoSampler& sampler = m_samplers[idx];
     sampler.boundConst = m_module.specConstBool(true);
     sampler.type = type;
-    m_module.decorateSpecId(sampler.boundConst, binding);
-    m_module.setDebugName(sampler.boundConst,
-      str::format("s", idx, "_bound").c_str());
 
-    // Store descriptor info for the shader interface
-    DxvkResourceSlot resource;
-    resource.slot   = binding;
-    resource.type   = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
-    resource.view   = implicit ? VK_IMAGE_VIEW_TYPE_MAX_ENUM : viewType;
-    resource.access = VK_ACCESS_SHADER_READ_BIT;
-    m_resourceSlots.push_back(resource);
+    if (m_moduleInfo.options.deAliasedSamplers) {
+      uint32_t boundConst = 0;
+      const uint32_t boolType = m_module.defBoolType();
+      for (uint32_t vBound : m_variantBoundConsts)
+        boundConst = boundConst != 0
+          ? m_module.opLogicalOr(boolType, boundConst, vBound)
+          : vBound;
+      sampler.boundConst = boundConst;
+    } else {
+      m_module.decorateSpecId(sampler.boundConst, binding);
+      m_module.setDebugName(sampler.boundConst,
+        str::format("s", idx, "_bound").c_str());
+
+      DxvkResourceSlot resource;
+      resource.slot   = binding;
+      resource.type   = VK_DESCRIPTOR_TYPE_COMBINED_IMAGE_SAMPLER;
+      resource.view   = implicit ? VK_IMAGE_VIEW_TYPE_MAX_ENUM : viewType;
+      resource.access = VK_ACCESS_SHADER_READ_BIT;
+      m_resourceSlots.push_back(resource);
+    }
   }
 
 

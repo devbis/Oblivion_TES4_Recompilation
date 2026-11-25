@@ -43,6 +43,8 @@ namespace dxvk {
     /// Works around a game bug in Halo CE where it gives cube textures to 2d/volume samplers
     bool forceSamplerTypeSpecConstants;
 
+    bool deAliasedSamplers;
+
     /// Should the VS constant buffer be an SSBO (swvp on NV)
     bool vertexConstantBufferAsSSBO;
 
