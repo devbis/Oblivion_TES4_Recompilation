@@ -289,6 +289,36 @@ static void install_crash_handler(void) {
     sigaction(SIGBUS, &sa, NULL);
     sigaction(SIGFPE, &sa, NULL);
 }
+#elif defined(__APPLE__)
+#include <execinfo.h>
+#include <signal.h>
+#include <sys/ucontext.h>
+static void on_crash(int sig, siginfo_t *si, void *opaque) {
+    fprintf(stderr, "CRASH: signal %d at address %p\n", sig, si->si_addr);
+    ucontext_t *uc = opaque;
+#if defined(__arm64__) || defined(__aarch64__)
+    fprintf(stderr, "PC=%p LR=%p SP=%p\n", (void *)uc->uc_mcontext->__ss.__pc,
+            (void *)uc->uc_mcontext->__ss.__lr, (void *)uc->uc_mcontext->__ss.__sp);
+#elif defined(__x86_64__)
+    fprintf(stderr, "PC=%p SP=%p\n", (void *)uc->uc_mcontext->__ss.__rip,
+            (void *)uc->uc_mcontext->__ss.__rsp);
+#endif
+    void *bt[64];
+    int n = backtrace(bt, 64);
+    backtrace_symbols_fd(bt, n, 2);
+    _exit(128 + sig);
+}
+static void install_crash_handler(void) {
+    struct sigaction sa;
+    memset(&sa, 0, sizeof sa);
+    sa.sa_sigaction = on_crash;
+    sa.sa_flags = SA_SIGINFO;
+    sigaction(SIGSEGV, &sa, NULL);
+    sigaction(SIGBUS, &sa, NULL);
+    sigaction(SIGFPE, &sa, NULL);
+    sigaction(SIGILL, &sa, NULL);
+    sigaction(SIGABRT, &sa, NULL);
+}
 #elif defined(__ANDROID__)
 #include <signal.h>
 #include <dlfcn.h>

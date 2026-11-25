@@ -40,6 +40,10 @@ static inline void *hcom_host(uint32_t g) { return g ? g_hcom_slots[M32(g + 8)] 
 /* AddRef/Release helpers; release returns 1 when the object died. */
 static inline uint32_t hcom_addref(uint32_t g) { return ++M32(g + 4); }
 static inline int hcom_release(uint32_t g, uint32_t *left) {
+    if (!g) {
+        if (left) *left = 0;
+        return 0;
+    }
     uint32_t r = --M32(g + 4);
     if (left) *left = r;
     if (r == 0) {

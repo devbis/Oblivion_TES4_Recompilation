@@ -309,6 +309,12 @@ static void view_release_owner(DSBuf *b) { uint32_t left; if (hcom_release(b->gu
 SHIM(d3b_QueryInterface) { if (ARG(2)) M32(ARG(2)) = 0; RET(E_NOINTERFACE_, 3); }
 SHIM(d3b_AddRef) { RET(hcom_addref(ARG(0)), 1); }
 SHIM(d3b_Release) {
+    if (!ARG(0)) {
+        static int warned;
+        if (!__atomic_exchange_n(&warned, 1, __ATOMIC_RELAXED))
+            LOG("dsound: ignored IDirectSound3DBuffer::Release(NULL)");
+        RET(0, 1);
+    }
     DSBuf *b = hcom_host(ARG(0));
     uint32_t left;
     if (hcom_release(ARG(0), &left)) view_release_owner(b);
@@ -367,6 +373,12 @@ static const ShimFn k_d3b_fns[] = {
 SHIM(d3l_QueryInterface) { if (ARG(2)) M32(ARG(2)) = 0; RET(E_NOINTERFACE_, 3); }
 SHIM(d3l_AddRef) { RET(hcom_addref(ARG(0)), 1); }
 SHIM(d3l_Release) {
+    if (!ARG(0)) {
+        static int warned;
+        if (!__atomic_exchange_n(&warned, 1, __ATOMIC_RELAXED))
+            LOG("dsound: ignored IDirectSound3DListener::Release(NULL)");
+        RET(0, 1);
+    }
     DSBuf *b = hcom_host(ARG(0));
     uint32_t left;
     if (hcom_release(ARG(0), &left)) view_release_owner(b);
