@@ -14,6 +14,10 @@ static const uint8_t GUID_SysKeyboard[16] = {0x61, 0x2B, 0x1D, 0x6F, 0xA0, 0xD5,
 
 enum { DEV_KEYBOARD, DEV_MOUSE };
 typedef struct { int kind; uint8_t prev[256]; uint32_t seq; } DIDev;
+/* DirectInput orders mouse buttons left, right, middle; SDL orders them
+ * left, middle, right. */
+static const Uint32 k_di_mouse_button_masks[3] = {
+    SDL_BUTTON_LMASK, SDL_BUTTON_RMASK, SDL_BUTTON_MMASK};
 
 static HComClass k_di8, k_didev;
 
@@ -129,7 +133,7 @@ SHIM(dev_GetDeviceState) {
         M32(p + 4) = (uint32_t)y;
         M32(p + 8) = (uint32_t)wheel;
         for (int i = 0; i < 3 && 12 + (uint32_t)i < n; i++)
-            M8(p + 12 + i) = ((b & SDL_BUTTON(i + 1)) || vb[i]) ? 0x80 : 0;
+            M8(p + 12 + i) = ((b & k_di_mouse_button_masks[i]) || vb[i]) ? 0x80 : 0;
     }
     RET(0, 3);
 }
@@ -179,7 +183,7 @@ SHIM(dev_GetDeviceData) {
         input_kbm_poll(vk, &dx, &dy, &w, vb, 1);
         x += dx; y += dy;
         uint8_t cur[3];
-        for (int i = 0; i < 3; i++) cur[i] = ((bs & SDL_BUTTON(i + 1)) || vb[i]) ? 0x80 : 0;
+        for (int i = 0; i < 3; i++) cur[i] = ((bs & k_di_mouse_button_masks[i]) || vb[i]) ? 0x80 : 0;
         struct { uint32_t ofs; int32_t val; } ev[6];
         int ne = 0;
         if (x) ev[ne++] = (typeof(ev[0])){0, x};
